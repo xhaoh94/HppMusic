@@ -72,6 +72,26 @@ export const router = createRouter({
       component: () => import('@mobile/features/profile/ProfilePage.vue'),
       meta: { title: '我的' },
     },
+
+    // ── 详情页 ──
+    {
+      path: '/playlist/:id',
+      name: 'playlist',
+      component: () => import('@mobile/features/detail/PlaylistDetailPage.vue'),
+      meta: { title: '歌单' },
+    },
+    {
+      path: '/album/:id',
+      name: 'album',
+      component: () => import('@mobile/features/detail/AlbumDetailPage.vue'),
+      meta: { title: '专辑' },
+    },
+    {
+      path: '/artist/:id',
+      name: 'artist',
+      component: () => import('@mobile/features/detail/ArtistDetailPage.vue'),
+      meta: { title: '歌手' },
+    },
     {
       path: '/settings',
       name: 'settings',
