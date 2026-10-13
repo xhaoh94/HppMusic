@@ -31,8 +31,18 @@ const props = defineProps<{
   active: boolean;
 }>();
 
-const { lines, currentIndex, isLoading, tips, hasLines, showTranslation, showRomanization, seekToLine } =
-  useLyrics();
+const {
+  lines,
+  currentIndex,
+  isLoading,
+  tips,
+  hasLines,
+  showTranslation,
+  showRomanization,
+  fontScale,
+  fontWeight,
+  seekToLine,
+} = useLyrics();
 
 const scroller = ref<HTMLElement | null>(null);
 const lineElements = ref<(HTMLElement | null)[]>([]);
@@ -131,6 +141,7 @@ const lineText = (line: LyricLine) => line.text || '♪';
   <div
     ref="scroller"
     class="lyrics"
+    :style="{ '--lyric-scale': fontScale, '--lyric-weight': fontWeight }"
     @pointerdown="noteUserScroll"
     @wheel.passive="noteUserScroll"
     @touchmove.passive="noteUserScroll"
@@ -233,7 +244,9 @@ const lineText = (line: LyricLine) => line.text || '♪';
 .line {
   margin: 0;
   padding: var(--sp-3) var(--sp-5);
-  font-size: var(--font-lg);
+  /* 字号与字重来自设置页（内核 lyric store 的 fontScale / fontWeightValue），
+     用 CSS 变量下发，避免每行都算一遍内联样式 */
+  font-size: calc(var(--font-lg) * var(--lyric-scale, 1));
   line-height: 1.5;
   color: var(--text-tertiary);
   text-align: center;
@@ -252,8 +265,8 @@ const lineText = (line: LyricLine) => line.text || '♪';
 
 .line.is-active {
   color: var(--text-primary);
-  font-size: var(--font-xl);
-  font-weight: var(--weight-bold);
+  font-size: calc(var(--font-xl) * var(--lyric-scale, 1));
+  font-weight: var(--lyric-weight, 700);
   transform: scale(1.02);
 }
 

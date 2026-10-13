@@ -18,6 +18,8 @@ import type { Song } from '@/models/song';
 import type { PlayMode } from '@shared/playback';
 import { usePlayerStore } from '@/stores/player';
 import { useLyricStore } from '@/stores/lyric';
+import { useSettingStore } from '@/stores/setting';
+import { isLyricLineFiltered, resolveVisibleLyricIndex } from '@/utils/lyricFilter';
 import { usePlaylistStore, MANUAL_PLAYBACK_QUEUE_ID } from '@/stores/playlist';
 import { useHistoryStore } from '@/stores/historyStore';
 import { waitForSqlitePersistHydration } from '@/stores/sqlitePersist';
@@ -344,9 +346,48 @@ export const useSmoothPosition = () => {
  */
 export const useLyrics = () => {
   const lyric = useLyricStore();
+  const setting = useSettingStore();
 
-  const lines = computed(() => lyric.displayLines ?? []);
-  const currentIndex = computed(() => lyric.currentIndex);
+  const filterConfig = computed(() => ({
+    enabled: Boolean(setting.lyricFilterEnabled),
+    pattern: String(setting.lyricFilterPattern ?? ''),
+  }));
+
+  /**
+   * 可见行在原数组里的下标。
+   *
+   * 过滤不能只靠 CSS 隐藏：`display: none` 的元素没有布局盒，`offsetTop` 归零，
+   * 歌词自动居中就失效了。所以这里**真的把行从渲染数组里去掉**，
+   * 同时把 `currentIndex` 从「原下标」重映射到「可见数组下标」。
+   */
+  const visibleIndices = computed(() => {
+    const source = lyric.displayLines ?? [];
+    return source
+      .map((line, index) => index)
+      .filter((index) => !isLyricLineFiltered(source[index], filterConfig.value));
+  });
+
+  const lines = computed(() => {
+    const source = lyric.displayLines ?? [];
+    return visibleIndices.value.map((index) => source[index]);
+  });
+
+  /**
+   * 当前行在**可见数组**里的下标。
+   *
+   * 两步：① 当前行本身被过滤掉时，向前找最近一个可见行（`resolveVisibleLyricIndex`，
+   * 内核提供），否则正在唱的那句恰好被过滤时会整页失去高亮；
+   * ② 把原下标换成可见数组下标。
+   */
+  const currentIndex = computed(() => {
+    const source = lyric.displayLines ?? [];
+    const raw = lyric.currentIndex;
+    if (raw < 0 || !source.length) return raw;
+    const visibleOriginal = resolveVisibleLyricIndex(source, raw, filterConfig.value);
+    if (visibleOriginal < 0) return -1;
+    return visibleIndices.value.indexOf(visibleOriginal);
+  });
+
   const isLoading = computed(() => lyric.isLoading);
   /** 无歌词时显示的原因文本（内核给的是人话，如「纯音乐，请欣赏」） */
   const tips = computed(() => lyric.tips || '暂无歌词');
@@ -354,6 +395,10 @@ export const useLyrics = () => {
 
   const showTranslation = computed(() => lyric.showTranslation);
   const showRomanization = computed(() => lyric.showRomanization);
+
+  /** 用户在设置里选的字号倍数 + 字重，交给 CSS 变量，避免逐行算样式 */
+  const fontScale = computed(() => Number(lyric.fontScale) || 1);
+  const fontWeight = computed(() => Number(lyric.fontWeightValue) || 700);
 
   /** 点击某行 → 跳到该行时间点（秒） */
   const seekToLine = (index: number) => {
@@ -372,6 +417,8 @@ export const useLyrics = () => {
     hasLines,
     showTranslation,
     showRomanization,
+    fontScale,
+    fontWeight,
     seekToLine,
   };
 };

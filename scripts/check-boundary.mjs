@@ -50,17 +50,22 @@ const ALLOWED_RENDERER = [
   'utils',
   'stores',
   'services',
-  'types.ts',
+  /**
+   * ⚠️ 这里是**按 specifier 前缀**匹配的，而导入写的是 `@/types`（不带扩展名），
+   * 所以不能写成 `types.ts`—— 写错了会永远匹配不上，把合法导入误报成越界。
+   * 本项目就因此吃了一报（写设置页时第一次用到 `@/types` 才暴露）。
+   */
+  'types',
   // 由 scripts/build-kugou-api.mjs 生成的 KuGou API 打包产物（gitignore，不在内核白名单的概念里，
   // 但桥接层必须能引它）
   'generated',
-  'theme/colors.ts',
-  'theme/model.ts',
-  'theme/registry.ts',
-  'plugins/audioSource.ts',
-  'plugins/lyrics.ts',
-  'plugins/coverFallback.ts',
-  'components/music/songContextMenuExtensions.ts',
+  'theme/colors',
+  'theme/model',
+  'theme/registry',
+  'plugins/audioSource',
+  'plugins/lyrics',
+  'plugins/coverFallback',
+  'components/music/songContextMenuExtensions',
 ];
 
 const ALLOWED_PREFIXES = ['@shared/', '@mobile/', '@bridge/', '@stubs/'];
