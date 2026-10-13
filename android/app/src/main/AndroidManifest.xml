@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:allowBackup="true"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:supportsRtl="true"
+        android:theme="@style/AppTheme"
+        android:usesCleartextTraffic="true">
+        <!--
+          usesCleartextTraffic：上游的音频与图片大量走 http（非 https），
+          关掉这条会让封面和播放地址全部加载失败。
+          与 capacitor.config.ts 的 android.allowMixedContent 是两件事：
+          后者管的是 https 页面加载 http 子资源，前者管的是明文请求本身。
+        -->
+
+        <!-- 后台播放：MediaSessionService，通知栏与锁屏控制由它提供 -->
+        <service
+            android:name=".EchoPlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <activity
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|navigation|density"
+            android:name=".MainActivity"
+            android:label="@string/title_activity_main"
+            android:theme="@style/AppTheme.NoActionBarLaunch"
+            android:launchMode="singleTask"
+            android:exported="true">
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- 应用内分享链路的回调入口（hppmusic://...） -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="hppmusic" />
+            </intent-filter>
+
+            <!-- 从别处「分享文本」进应用（EchoSharePlugin 读取） -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+        </activity>
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths"></meta-data>
+        </provider>
+    </application>
+
+    <!-- Permissions -->
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- 后台播放的前台服务（Android 14 起必须声明具体的 foregroundServiceType） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <!-- Android 13+ 通知需运行时授权；播放通知没有它就不显示（音乐照常播） -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 听歌识曲用麦克风（功能后续接入，权限先声明避免届时要改清单） -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+</manifest>

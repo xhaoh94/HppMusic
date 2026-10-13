@@ -1,0 +1,77 @@
+{
+  "_comment": "上游内核 vendor 记录。由 scripts/sync-upstream.mjs 自动维护，手工改动会被覆盖。",
+  "repo": "https://github.com/hoowhoami/EchoMusic.git",
+  "localPath": "C:/Project/EchoMusicMobile",
+  "commit": "8c987917393d70827c0bb844fbeec8e78efe83b9",
+  "dirty": false,
+  "syncedAt": "2026-10-13T13:37:56.385Z",
+  "license": "GPL-3.0-only",
+  "include": [
+    "src/shims-vue.d.ts",
+    "src/shared",
+    "src/renderer/types.ts",
+    "src/renderer/electron.d.ts",
+    "src/renderer/api",
+    "src/renderer/models",
+    "src/renderer/utils",
+    "src/renderer/stores",
+    "src/renderer/services",
+    "src/renderer/plugins/audioSource.ts",
+    "src/renderer/plugins/lyrics.ts",
+    "src/renderer/plugins/coverFallback.ts",
+    "src/renderer/theme/colors.ts",
+    "src/renderer/theme/model.ts",
+    "src/renderer/theme/registry.ts",
+    "src/renderer/components/music/songContextMenuExtensions.ts",
+    "src/main/external"
+  ],
+  "exclude": [
+    "src/renderer/utils/shortcuts.ts",
+    "src/renderer/utils/sidebarHome.ts",
+    "src/renderer/utils/rendererMemoryDiagnostics.ts",
+    "src/renderer/stores/pluginUpdates.ts",
+    "src/renderer/stores/cloudUpload.ts",
+    "src/renderer/stores/importTask.ts"
+  ],
+  "excludeReasons": {
+    "src/renderer/utils/shortcuts.ts": "依赖 @/desktopLyric/store（桌面歌词）",
+    "src/renderer/utils/sidebarHome.ts": "依赖 @/layouts/*（桌面侧边栏）",
+    "src/renderer/utils/rendererMemoryDiagnostics.ts": "依赖 @/plugins/runtime（桌面插件运行时）",
+    "src/renderer/stores/pluginUpdates.ts": "依赖 @/plugins/runtime + @/views/plugins/*（插件系统，本项目不做）",
+    "src/renderer/stores/cloudUpload.ts": "依赖 @/plugins/taskPanel + @/tasks/taskControl + @/router（云盘，后置）",
+    "src/renderer/stores/importTask.ts": "依赖 @/plugins/taskPanel + @/tasks/taskControl（导入任务，后置）"
+  },
+  "aliases": {
+    "@/plugins/runtime": "src/stubs/plugins-runtime.ts",
+    "@/plugins/runtime/theme": "src/stubs/plugins-runtime-theme.ts",
+    "@/plugins/taskPanel": "src/stubs/plugins-task-panel.ts",
+    "@/tasks/taskControl": "src/stubs/tasks-task-control.ts",
+    "electron-log": "src/stubs/electron-log.ts"
+  },
+  "rewrites": [
+    {
+      "file": "src/renderer/stores/setting.ts",
+      "replacements": [
+        {
+          "from": "import { emptyTitlebarLayout } from '../plugins/titlebar';",
+          "to": "import { emptyTitlebarLayout } from '@stubs/desktop-layout';"
+        },
+        {
+          "from": "import { emptyPlayerBarLayout } from '../layouts/playerBarActions';",
+          "to": "import { emptyPlayerBarLayout } from '@stubs/desktop-layout';"
+        },
+        {
+          "from": "import { emptySidebarLayout } from '../layouts/sidebarLayout';",
+          "to": "import { emptySidebarLayout } from '@stubs/desktop-layout';"
+        }
+      ],
+      "why": "这3个模块属于桌面外壳（标题栏/播放器底栏/侧边栏）的布局定义，移动端不 vendor；且它们是相对路径导入，不能用 alias 按模块路径重定向（同一字符串在不同目录含义不同），因此在复制后定点替换"
+    }
+  ],
+  "aliasReasons": {
+    "electron-log": "外部歌单导入的 providers 用它打日志；WebView 里没有 Electron 的日志实现，桩实现把日志转给 console"
+  },
+  "allowUiImports": {
+    "@/components/music/songContextMenuExtensions": "歌曲长按菜单的注册表（44 行纯注册逻辑，非 UI 实现）；内核的屏蔽内容集成会往里注册条目，移动端自研的长按菜单读同一份注册表"
+  }
+}

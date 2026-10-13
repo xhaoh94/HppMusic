@@ -1,0 +1,33 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": false,
+    "skipLibCheck": true,
+    "jsx": "preserve",
+    "types": ["vite/client", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/renderer/*"],
+      "@shared/*": ["src/shared/*"],
+      "@mobile/*": ["src/mobile/*"],
+      "@bridge/*": ["src/bridge/*"],
+      "@stubs/*": ["src/stubs/*"],
+      "@/plugins/runtime": ["src/stubs/plugins-runtime.ts"],
+      "@/plugins/runtime/theme": ["src/stubs/plugins-runtime-theme.ts"],
+      "@/plugins/taskPanel": ["src/stubs/plugins-task-panel.ts"],
+      "@/tasks/taskControl": ["src/stubs/tasks-task-control.ts"],
+      "electron-log": ["src/stubs/electron-log.ts"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.vue", "scripts/**/*.mjs", "tests/**/*.ts"],
+  "exclude": ["node_modules", "android", "server", "dist"]
+}

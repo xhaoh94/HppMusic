@@ -1,0 +1,31 @@
+# 依赖与构建产物
+node_modules/
+dist/
+dist-electron/
+release/
+
+# 由 scripts/build-kugou-api.mjs 生成，不入库
+src/renderer/generated/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/src/main/assets/public/
+android/app/src/main/assets/capacitor.config.json
+android/app/src/main/assets/capacitor.plugins.json
+android/capacitor-cordova-android-plugins/
+android/app/src/main/res/xml/config.xml
+*.apk
+*.aab
+*.keystore
+*.jks
+
+# 工具
+.DS_Store
+Thumbs.db
+*.log
+.vscode/*
+!.vscode/settings.json
+.tmp/

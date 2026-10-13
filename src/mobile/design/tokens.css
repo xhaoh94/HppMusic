@@ -1,0 +1,291 @@
+/**
+ * HppMusic 设计令牌与基础样式。
+ *
+ * 这是**全新自研**的移动端样式底座，与桌面渲染层的 style.css / mobile.css 没有任何关系：
+ * 不引入 Tailwind（桌面那套工具类依赖构建期扫描 `../src/renderer`，
+ * 扫不到就会静默退化 —— 旧方案就是因此在移动端布局全塌），
+ * 全部用语义化的 CSS 变量 + 自研组件样式。
+ *
+ * ── 浏览器兼容基线：Chrome 110 ──
+ * Android 12 上的系统 WebView 常见停在 110，因此：
+ * · 不使用 `color-mix()`（Chrome 111+）—— 颜色透明度一律预先算好写成 rgba
+ * · 不使用 `@container` 容器查询（Chrome 105 有基本支持，但 WebView 上不稳定）
+ * · 不使用 CSS 嵌套（Chrome 112+）
+ * 构建后由 `scripts/check-css-compat.mjs` 扫描产物做守卫。
+ *
+ * ── 安全区 ──
+ * Android WebView **不支持 `env(safe-area-inset-*)`**（那是 iOS Safari 的特性，写了恒为 0）。
+ * Capacitor 8 内置的 SystemBars 行为（默认 insetsHandling = 'css'）会把真实值注入成
+ * `--safe-area-inset-*` 内联变量。这里统一桥接成 --safe-*，全站只用 --safe-*：
+ * 新 WebView 拿到真值（insets 穿透，必须自己留白），旧 WebView 拿到 0（Capacitor 给
+ * decorView 加了 padding，样式层再加就重复留白）。两种设备都正确，不用判版本。
+ */
+
+/* ══════════════════════════════════════════════════════════
+   1. 令牌
+   ══════════════════════════════════════════════════════════ */
+
+:root {
+  /* ── 安全区桥接 ── */
+  --safe-top: var(--safe-area-inset-top, 0px);
+  --safe-right: var(--safe-area-inset-right, 0px);
+  --safe-bottom: var(--safe-area-inset-bottom, 0px);
+  --safe-left: var(--safe-area-inset-left, 0px);
+
+  /* ── 间距（8pt 栅格，4 为半档） ── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* ── 圆角 ── */
+  --radius-xs: 6px;
+  --radius-sm: 10px;
+  --radius-md: 14px;
+  --radius-lg: 18px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+
+  /* ── 字号（移动端可读性优先，正文 14 起步） ── */
+  --font-xs: 11px;
+  --font-sm: 12px;
+  --font-md: 14px;
+  --font-lg: 16px;
+  --font-xl: 19px;
+  --font-2xl: 23px;
+  --font-3xl: 28px;
+
+  --weight-regular: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+
+  /* ── 动效 ── */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --ease-accelerate: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --duration-fast: 120ms;
+  --duration-normal: 200ms;
+  --duration-slow: 320ms;
+
+  /* ── 层级（集中管理，避免散落的 magic number 打架） ── */
+  --z-content: 1;
+  --z-sticky: 10;
+  --z-shell: 100;
+  --z-sheet: 200;
+  --z-dialog: 300;
+  --z-toast: 400;
+  --z-overlay-page: 500;
+
+  /* ── 外壳尺寸 ── */
+  --bottom-bar-height: 56px;
+  --sub-tab-bar-height: 48px;
+  --mini-player-height: 56px;
+}
+
+/* ── 深色（默认） ── */
+:root,
+[data-theme='dark'] {
+  color-scheme: dark;
+
+  --bg-base: #0b0b0f;
+  --bg-raised: #141419;
+  --bg-overlay: #1b1b22;
+  --bg-sheet: #17171d;
+  --bg-input: #1f1f27;
+
+  --text-primary: #f5f5f7;
+  --text-secondary: #a1a1ad;
+  --text-tertiary: #6e6e7a;
+  --text-inverse: #0b0b0f;
+
+  --divider: rgba(255, 255, 255, 0.08);
+  --divider-strong: rgba(255, 255, 255, 0.16);
+
+  --fill-subtle: rgba(255, 255, 255, 0.04);
+  --fill-muted: rgba(255, 255, 255, 0.07);
+  --fill-strong: rgba(255, 255, 255, 0.12);
+
+  --accent: #ff4e3a;
+  --accent-pressed: #e33f2d;
+  --accent-soft: rgba(255, 78, 58, 0.14);
+  --accent-on: #ffffff;
+
+  --success: #35c17b;
+  --warning: #f5a524;
+  --danger: #f4453d;
+
+  --skeleton-base: rgba(255, 255, 255, 0.06);
+  --skeleton-highlight: rgba(255, 255, 255, 0.12);
+
+  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.5);
+  --shadow-dialog: 0 12px 48px rgba(0, 0, 0, 0.6);
+}
+
+/* ── 浅色 ── */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg-base: #f7f7f9;
+  --bg-raised: #ffffff;
+  --bg-overlay: #ffffff;
+  --bg-sheet: #ffffff;
+  --bg-input: #f0f0f4;
+
+  --text-primary: #17171d;
+  --text-secondary: #5f5f6b;
+  --text-tertiary: #8f8f9c;
+  --text-inverse: #ffffff;
+
+  --divider: rgba(0, 0, 0, 0.08);
+  --divider-strong: rgba(0, 0, 0, 0.16);
+
+  --fill-subtle: rgba(0, 0, 0, 0.03);
+  --fill-muted: rgba(0, 0, 0, 0.06);
+  --fill-strong: rgba(0, 0, 0, 0.1);
+
+  --accent: #ff3d28;
+  --accent-pressed: #d9301d;
+  --accent-soft: rgba(255, 61, 40, 0.12);
+  --accent-on: #ffffff;
+
+  --success: #1f9d5f;
+  --warning: #c47f00;
+  --danger: #d63a32;
+
+  --skeleton-base: rgba(0, 0, 0, 0.06);
+  --skeleton-highlight: rgba(0, 0, 0, 0.11);
+
+  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.16);
+  --shadow-dialog: 0 12px 48px rgba(0, 0, 0, 0.2);
+}
+
+/* ══════════════════════════════════════════════════════════
+   2. 基础重置
+   ══════════════════════════════════════════════════════════ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family:
+    -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans SC', 'PingFang SC',
+    'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  font-size: var(--font-md);
+  line-height: var(--leading-normal);
+  /**
+   * 固定文字按 1:1 渲染。
+   *
+   * Android 系统字号会通过 WebView 的 text-size-adjust 放大文字，而我们的布局
+   * （固定高度的栏、单行省略的标题）按 100% 设计 —— 放大到 130% 就会挤爆。
+   * 应用内字号在「设置 → 外观」里给（写 --font-scale），改动受控。
+   */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  overscroll-behavior: none;
+}
+
+#app {
+  height: 100%;
+  /* 点击高亮交给自研组件的 :active 态，不要系统的灰块 */
+  -webkit-tap-highlight-color: transparent;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+input,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+img {
+  display: block;
+  max-width: 100%;
+}
+
+/* 滚动容器统一隐藏滚动条（触屏上滚动条只会闪一下，反而干扰） */
+.scroll-y {
+  overflow-y: auto;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.scroll-y::-webkit-scrollbar,
+.scroll-x::-webkit-scrollbar {
+  display: none;
+}
+
+.scroll-x {
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+/* ── 无障碍：屏幕阅读器可见但视觉隐藏 ── */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── 单行 / 多行省略（高频需求，做成工具类避免到处重复写） ── */
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.clamp-2 {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* 尊重系统「减少动态效果」 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

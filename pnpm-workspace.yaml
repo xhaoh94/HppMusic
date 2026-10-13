@@ -1,0 +1,14 @@
+# pnpm 12 起，原来放在 package.json 的 `pnpm` 字段已不再读取，这些设置的新家在这里。
+#
+# 只声明本仓库自身为 workspace 成员：`server/` 是 git submodule，它的依赖
+# （axios / crypto-js / node-forge / pako / qrcode …）刻意由根 node_modules 提供，
+# esbuild 会按 Node 的解析规则向上找到它们 —— 这样 submodule 始终保持干净。
+packages:
+  - .
+
+# esbuild 的 postinstall 负责摆放平台二进制；pnpm 默认拦截所有构建脚本，必须显式放行。
+#
+# ⚠️ pnpm 12 把旧的 `pnpm.onlyBuiltDependencies` 改名为 `allowBuilds`，
+# 且设置只从本文件读取（package.json 的 pnpm 字段已不再被读取）。
+allowBuilds:
+  esbuild: true

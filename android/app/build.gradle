@@ -1,0 +1,94 @@
+apply plugin: 'com.android.application'
+
+android {
+    namespace = "com.hppmusic.app"
+    compileSdk = rootProject.ext.compileSdkVersion
+    defaultConfig {
+        applicationId "com.hppmusic.app"
+        minSdkVersion rootProject.ext.minSdkVersion
+        targetSdkVersion rootProject.ext.targetSdkVersion
+        versionCode 1
+        versionName "1.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+        aaptOptions {
+             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
+             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
+            ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    /**
+     * AGP 8 起 BuildConfig 默认不再生成，需要显式开启 ——
+     * MainActivity 用它判断 debug 包来决定是否开 WebView 调试。
+     */
+    buildFeatures {
+        buildConfig = true
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            /**
+             * 正式包签名。密钥路径与口令从 local.properties 读（该文件已 gitignore，
+             * 不会进仓库）；没配时**显式**回落到 debug 密钥 ——
+             * release 默认产出的是 app-release-unsigned.apk（根本装不上），
+             * 不显式指定 signingConfig 是不会自动回落的。
+             */
+            def props = new Properties()
+            def propsFile = rootProject.file('local.properties')
+            if (propsFile.exists()) propsFile.withInputStream { props.load(it) }
+            if (props.getProperty('HPP_KEYSTORE_PATH')) {
+                signingConfig signingConfigs.release
+            } else {
+                signingConfig signingConfigs.debug
+            }
+        }
+    }
+
+    signingConfigs {
+        release {
+            def props = new Properties()
+            def propsFile = rootProject.file('local.properties')
+            if (propsFile.exists()) propsFile.withInputStream { props.load(it) }
+            def storePath = props.getProperty('HPP_KEYSTORE_PATH')
+            if (storePath) {
+                storeFile file(storePath)
+                storePassword props.getProperty('HPP_KEYSTORE_PASSWORD') ?: ''
+                keyAlias props.getProperty('HPP_KEY_ALIAS') ?: ''
+                keyPassword props.getProperty('HPP_KEY_PASSWORD') ?: ''
+            }
+        }
+    }
+}
+
+repositories {
+    flatDir{
+        dirs '../capacitor-cordova-android-plugins/src/main/libs', 'libs'
+    }
+}
+
+dependencies {
+    implementation fileTree(include: ['*.jar'], dir: 'libs')
+    implementation "androidx.appcompat:appcompat:$androidxAppCompatVersion"
+    implementation "androidx.coordinatorlayout:coordinatorlayout:$androidxCoordinatorLayoutVersion"
+    implementation "androidx.core:core-splashscreen:$coreSplashScreenVersion"
+    // Media3：原生播放器（EchoNativePlayerPlugin / EchoPlaybackService）
+    implementation "androidx.media3:media3-exoplayer:1.6.1"
+    implementation "androidx.media3:media3-session:1.6.1"
+    implementation project(':capacitor-android')
+    testImplementation "junit:junit:$junitVersion"
+    androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
+    androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"
+    implementation project(':capacitor-cordova-android-plugins')
+}
+
+apply from: 'capacitor.build.gradle'
+
+try {
+    def servicesJSON = file('google-services.json')
+    if (servicesJSON.text) {
+        apply plugin: 'com.google.gms.google-services'
+    }
+} catch(Exception e) {
+    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+}
