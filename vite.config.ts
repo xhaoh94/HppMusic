@@ -5,7 +5,6 @@ import vue from '@vitejs/plugin-vue';
 
 const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8'));
 
-const src = fileURLToPath(new URL('./src', import.meta.url));
 const renderer = fileURLToPath(new URL('./src/renderer', import.meta.url));
 const shared = fileURLToPath(new URL('./src/shared', import.meta.url));
 const mobile = fileURLToPath(new URL('./src/mobile', import.meta.url));
@@ -21,6 +20,7 @@ const stubs = fileURLToPath(new URL('./src/stubs', import.meta.url));
  * ⚠️ 顺序敏感：`@/plugins/runtime/theme` 必须排在 `@/plugins/runtime` 之前，
  * Vite 的字符串别名是前缀匹配，顺序反了前者会永远命不中。
  */
+
 const stubAliases = [
   { find: '@/plugins/runtime/theme', replacement: `${stubs}/plugins-runtime-theme.ts` },
   { find: '@/plugins/runtime', replacement: `${stubs}/plugins-runtime.ts` },
@@ -31,8 +31,39 @@ const stubAliases = [
   { find: 'electron-log', replacement: `${stubs}/electron-log.ts` },
 ];
 
+/**
+ * 输出构建清单，供 scripts/check-boot-order.mjs 检查加载顺序。
+ *
+ * 为什么不用 manualChunks 固定分块：分块策略是优化手段，会随代码变化；
+ * 而这里要守的是一个**依赖图不变量** —— 「入口 chunk 的静态依赖里不能出现内核模块」。
+ * 直接拿 Rollup 的分块结果（每个 chunk 里到底装了哪些源文件）来判定，
+ * 既不约束分块策略，又能捕获间接的静态链路（A→B→内核 也算违规）。
+ */
+function buildManifest() {
+  return {
+    name: 'echo-build-manifest',
+    generateBundle(_options, bundle) {
+      const manifest = Object.entries(bundle)
+        .filter(([, item]) => item.type === 'chunk')
+        .map(([file, chunk]) => ({
+          file,
+          isEntry: Boolean(chunk.isEntry),
+          isDynamicEntry: Boolean(chunk.isDynamicEntry),
+          imports: chunk.imports,
+          dynamicImports: chunk.dynamicImports,
+          modules: Object.keys(chunk.modules),
+        }));
+      this.emitFile({
+        type: 'asset',
+        fileName: 'build-manifest.json',
+        source: `${JSON.stringify({ chunks: manifest }, null, 2)}\n`,
+      });
+    },
+  };
+}
+
 export default defineConfig({
-  plugins: [vue()],
+  plugins: [vue(), buildManifest()],
   resolve: {
     alias: [
       ...stubAliases,

@@ -139,6 +139,17 @@ const PROBE = `(() => {
   const cssVar = (name) => getComputedStyle(de).getPropertyValue(name).trim();
 
   // 找出横向溢出的元素（只报最靠右的 5 个，避免刷屏）
+  // 空 svg = 图标没渲染出来。
+  //
+  // 这是个很容易静默失效的地方：图标数据拿不到时，Iconify 会渲染一个
+  // viewBox="0 0 16 16" 的空 svg —— 不报错、不警告，只是“位置上什么都没有”，
+  // 看起来很像 CSS 问题。本项目实测过一次（@iconify/icons-tabler 的 CJS
+  // 默认导出被多包了一层），所以把它当成一条通用断言。
+  // （注意：这里是模板字符串内部，写注释不要用反引号）
+  const emptySvgs = [...document.body.querySelectorAll('svg')]
+    .filter((svg) => svg.innerHTML.trim().length === 0)
+    .map((svg) => String(svg.parentElement?.className || svg.parentElement?.tagName || '').slice(0, 40));
+
   const bleeders = [];
   const limit = de.clientWidth + 2;
   for (const el of document.body.querySelectorAll('*')) {
@@ -171,6 +182,8 @@ const PROBE = `(() => {
     visibleText: (document.body.innerText || '').trim().slice(0, 80),
     bleeders: bleeders.slice(0, 5),
     totalBleeders: bleeders.length,
+    totalSvgs: document.body.querySelectorAll('svg').length,
+    emptySvgs,
   });
 })()`;
 
@@ -233,6 +246,11 @@ for (const viewport of VIEWPORTS) {
   );
   assert('--safe-top 是 px 值', isPx(probe.safeTop), `值=${probe.safeTop}`);
   assert('--safe-bottom 是 px 值', isPx(probe.safeBottom), `值=${probe.safeBottom}`);
+  assert(
+    '所有 svg 图标都有内容',
+    probe.emptySvgs.length === 0,
+    `${probe.emptySvgs.length}/${probe.totalSvgs} 个空图标：${probe.emptySvgs.join(' / ')}`,
+  );
 
   // 外壳相关断言只在真的渲染出外壳时执行（登录页没有外壳）
   if (probe.shell) {

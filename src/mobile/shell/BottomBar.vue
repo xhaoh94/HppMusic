@@ -5,34 +5,44 @@
  * 对齐参考产品：中间不是一个普通图标 tab，而是**当前曲目的封面圆钮**，
  * 点开全屏播放页；播放中封面匀速自转（唱片感）。
  *
- * P0 只接线到「有没有曲目」这一层；P2 接上 player store 的封面/播放态与
- * 全屏播放页的开关。这里刻意不预先 import player store —— 它在模块初始化时
- * 读 window.electron，而外壳是最早挂载的组件之一，早于桥被使用。
+ * 状态全部来自 `@mobile/adapters/player` —— 不直接读内核 store：
+ * 外壳是最早挂载的组件之一，而内核 store 在模块初始化时就摸 window.electron，
+ * 经适配层隔离后，这边只需保证它是被动态加载的（见 main.ts 的顺序说明）。
  */
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import { iconHome, iconMusic, iconProfile } from '@mobile/icons';
+import { useNowPlaying } from '@mobile/adapters/player';
+import { useToastStore } from '@/stores/toast';
 
 const route = useRoute();
 const router = useRouter();
+const toast = useToastStore();
 
 const isHomeSection = computed(() => route.meta.section === 'main');
 const isProfile = computed(() => route.path.startsWith('/profile'));
 
-/** P2 接 player store；先留出接口形状，避免届时要重排模板。 */
-const hasTrack = ref(false);
-const isPlaying = ref(false);
-const coverUrl = ref('');
+const { hasTrack, isPlaying, coverUrl } = useNowPlaying();
 
 const go = (path: string) => {
   if (route.path === path) return;
   void router.push(path);
 };
 
+/**
+ * 打开全屏播放页。
+ *
+ * 没有曲目时不进去 —— 进去只会看到一个空封面加一排禁用按钮，
+ * 不如给一句提示告诉用户"先挑首歌"。
+ */
 const openNowPlaying = () => {
-  // P2: playerStore.toggleLyricView(true)
-  if (!hasTrack.value) return;
+  if (!hasTrack.value) {
+    toast.info('还没有播放内容，先去首页挑一首吧');
+    return;
+  }
+  if (route.name === 'player') return;
+  void router.push({ name: 'player' });
 };
 </script>
 

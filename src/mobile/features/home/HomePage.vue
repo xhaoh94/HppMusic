@@ -22,9 +22,11 @@ import { extractList } from '@/utils/extractors';
 import { mapTopSong } from '@/utils/mappers';
 import type { Song } from '@/models/song';
 import { iconAlbum, iconMusicOff, iconSearch } from '@mobile/icons';
+import { usePlaybackActions } from '@mobile/adapters/player';
 
 const router = useRouter();
 const toast = useToastStore();
+const { playSong } = usePlaybackActions();
 
 type LoadState = 'loading' | 'ready' | 'error';
 
@@ -108,8 +110,20 @@ const load = async () => {
   }
 };
 
-const onSelect = (song: Song) => {
-  toast.info(`播放功能将在下一步接入：${song.title}`);
+/**
+ * 点歌。
+ *
+ * 整个每日推荐列表作为播放上下文传进去，而不是只播这一首 —— 否则播完就停了，
+ * 用户得自己一首首点。队列 id 用固定的字符串（而不是每次生成），
+ * 这样在首页重复点歌不会攒出一堆内容相同的队列。
+ */
+const onSelect = async (song: Song) => {
+  const started = await playSong(song, songs.value, {
+    queueId: 'queue:mobile-daily',
+    title: '每日推荐',
+    subtitle: '',
+  });
+  if (!started) toast.warning('这首歌暂时无法播放，试试别的');
 };
 
 onMounted(() => {

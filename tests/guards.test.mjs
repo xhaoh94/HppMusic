@@ -97,6 +97,18 @@ describe('KuGou API 打包产物', () => {
   });
 });
 
+describe('启动顺序', () => {
+  /**
+   * 入口 chunk 不能静态依赖内核 —— 内核里有模块在模块初始化时抓 window.electron，
+   * 静态依赖会让它们在 initApiBridge() 之前求值，且**不报错**。
+   * 详见 src/mobile/main.ts 头部与 scripts/check-boot-order.mjs。
+   */
+  it('入口不静态依赖内核模块', () => {
+    if (!statSync(path.join(ROOT, 'dist'), { throwIfNoEntry: false })) return;
+    expect(() => runNode('check-boot-order.mjs')).not.toThrow();
+  });
+});
+
 describe('CSS 兼容基线', () => {
   it('构建产物不含超过 Chrome 110 的特性', () => {
     const dist = path.join(ROOT, 'dist');

@@ -14,22 +14,37 @@
 - **补齐时机**：P1。做法是在 `src/mobile/components/VerificationSheet.vue` 里按 provider 分支，
   加载对应 SDK 并在 App 内嵌 WebView/iframe 中承载；内核侧状态机（`@/utils/kugouVerification`）已就绪，不需要改。
 
-## 2. 播放链路未接线（P0 范围决定）
+## 2. 播放链路已接线，但**完整验证需要真实登录**
 
-- **现象**：点歌只弹「播放功能将在下一步接入」。
-- **当前行为**：每日推荐列表能真实拉取并渲染（说明设备注册、加密请求、响应解密、映射全链路已通），
-  但不播放。
-- **补齐时机**：P2。原生的 `EchoNativePlayerPlugin` / `EchoPlaybackService`（Media3 + 通知栏 + DSP）
-  已随工程编译进 APK，只差渲染层接线。
+- **已完成**：
+  - `src/mobile/adapters/player.ts` 适配层（启动引导 / 只读状态 / 操作），页面不直接读内核 store
+  - 底部圆钮接真实封面与播放态；全屏播放页 `/player`（封面 + 进度拖动 + 传输行 + 队列面板）
+  - 首页点歌→入队→播放已接通（点击后有可读错误提示，不是静默无响应）
+  - 启动页新增「恢复播放状态」步骤（水合队列/历史 + `player.init()`，
+    后者负责注册系统媒体控制回调，晚注册会丢通知栏事件）
+- **已验证**：原生播放链路（Media3 → AudioTrack）用本地合成的 WAV 走通：
+  `load` 返回 `duration = 5`、`play` 后 `timePos` 从 1.936 推进到 3.432（真实在放）。
+  工具：`node scripts/dev/serve-audio-fixture.mjs`（现场合成 5 秒正弦波 WAV，
+  不依赖任何外部 URL —— 实测 Google 的 ExoPlayer 测试音频域名在当前网络下 HTTPS 被重置）。
+- **未验证**：`/song/url/auth/merge` 需先用假 token 从 `getUserVerify()` 取 `auth`，
+  所以**真实出声那一公里必须用真账号验证**。
+  用伪造登录态点歌会得到内核的「歌曲不支持」提示（预期行为，已确认错误链路可读）。
+- **验收入口**：登录后在首页点一首歌，确认：
+  ① 出声；② 进度条与时间走动；③ 通知栏出现播放控制且能暂停/切歌；
+  ④ 杀进程重启后播放状态恢复。
 
 ## 3. 主界面布局未做自动化验证
 
 - **现象**：`pnpm verify:layout` 只覆盖**未登录可达**的页面（启动页、登录页）。
-- **原因**：主界面需要真实登录态；无头 Chrome 里设备注册与鉴权都会失败，无法造出可信的登录状态。
-- **当前替代**：真机验证（`bash scripts/device-forward.sh` + `pnpm verify:device "..."`）。
-- **补齐时机**：P1。给 `verify-layout.mjs` 加 `--fake-login`，通过 CDP
-  `Page.addScriptToEvaluateOnNewDocument` 预置 localStorage 里的持久化用户态
-  （键名规则见 `src/bridge/storage.ts` 的 `KV_PREFIX` 与 `@shared/storePersistence`）。
+- **原因**：主界面需要登录态；无头 Chrome 里设备注册与鉴权都会失败。
+- **当前替代**：
+  - 真机：`bash scripts/device-forward.sh` + `pnpm verify:device "..."`
+  - 伪造登录态：向 localStorage 写 `echo.mobile.kv.pinia:user`
+    （`{ info: { userid, token, nickname }, isLoggedIn: true, savedAccounts: [...] }`）
+    再 reload，即可进入主界面（接口会报错，但布局/错误态/播放页可验）。
+    本文档中多个结论（时长单位、图标空 svg）就是靠这个方式发现的。
+- **补齐时机**：P1。把它产品化成 `verify-layout.mjs --fake-login`
+  （用 CDP `Page.addScriptToEvaluateOnNewDocument` 预置状态）。
 
 ## 4. 未实现的功能入口一律不展示
 

@@ -17,6 +17,7 @@ import { ensureDevice } from '@/utils/device';
 import { useDeviceStore } from '@/stores/device';
 import { useToastStore } from '@/stores/toast';
 import logger from '@/utils/logger';
+import { bootstrapPlayer } from '@mobile/adapters/player';
 
 const router = useRouter();
 const toast = useToastStore();
@@ -83,6 +84,13 @@ const bootstrap = async () => {
       const available = await window.electron?.player?.available?.();
       if (!available) throw new Error('播放引擎不可用');
       return available;
+    });
+
+    // 初始化播放内核：恢复队列/历史快照、恢复播放会话、注册系统媒体控制回调。
+    // 必须在进主界面之前完成 —— init() 会注册 MediaSession 回调，晚注册意味着
+    // 用户在系统通知栏按暂停时事件会丢。
+    await step('正在恢复播放状态…', async () => {
+      await bootstrapPlayer();
     });
 
     message.value = '准备就绪';

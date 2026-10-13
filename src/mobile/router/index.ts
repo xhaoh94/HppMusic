@@ -51,6 +51,14 @@ export const router = createRouter({
       meta: { section: 'main', title: '探索' },
     },
 
+    // ── 全屏页（不带外壳） ──
+    {
+      path: '/player',
+      name: 'player',
+      component: () => import('@mobile/features/player/PlayerPage.vue'),
+      meta: { shell: false, title: '正在播放' },
+    },
+
     // ── 独立页面 ──
     {
       path: '/search',

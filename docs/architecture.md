@@ -54,22 +54,70 @@
 
 任何一项解析不到就终止，并提示该加进 `include` / `exclude` 还是 `aliases`。
 
-## 三、桥接层的加载顺序（最容易踩的坑）
+## 三、启动顺序（最容易踩的坑）
+
+### 机制：静态 import 只允许出现在桥之前
 
 ```ts
-// src/mobile/main.ts —— 顺序不能反
-import '@bridge/polyfills';              // ① 必须最先：server/util 在模块初始化时读 process.env
+// src/mobile/main.ts
+import '@bridge/polyfills';              // ① server/util 在模块初始化时读 process.env
 import { initApiBridge } from '@bridge/apiBridge';
 const bridge = initApiBridge({ ... });   // ② 挂 window.electron
 initBackButtonHook();
-const App = await import('@mobile/App.vue');   // ③ 动态 import
-const { router } = await import('@mobile/router');
+
+// ③ 剩下的一律动态 import：pinia/store、App.vue、router
+const [{ pinia }, { default: App }, { router }] = await Promise.all([...]);
 ```
 
-原因：内核里有一批模块在**模块初始化时**就抓 `window.electron.player`
-（`utils/player.ts` 最典型）。ESM 的静态 import 会在本文件任何语句执行前把整棵依赖树求值完 ——
-写成静态 import，它们只会抓到 `undefined`，桥永远失效。**而且不报错**，
-表现为"播放键按下去没反应"，极难排查。
+原因：内核里有一批模块在**模块初始化时**就抓 `window.electron.*`，
+且 ESM 的求值顺序是 **chunk 的静态 import 先于入口模块体**。所以只要内核模块
+出现在入口 chunk 的静态依赖里，它们就一定在 `initApiBridge()` 之前被求值 ——
+**而且不报错**（日志退化成 console；`window.electron.player` 则完全失效）。
+
+> 曾经试过「把桥的初始化放进一个被第一个 `import` 的模块」来构造顺序保证，
+> **实测无效**：Rollup 会把跨 chunk 的 `import` 提到文件顶部，入口 chunk 的
+> 模块体排在所有 chunk 之后。顺序保证必须落在**依赖图**上，不能靠 import 语句的书写位置。
+
+### 守卫：`scripts/check-boot-order.mjs`
+
+构建产物里多了 `dist/build-manifest.json`（由 vite 插件输出，记录每个 chunk
+实际装了哪些源文件）。守卫从入口 chunk 出发沿**静态 imports** 做闭包，
+一旦碰到 `src/renderer/**`（generated 除外）就失败。
+
+这样就能捕获**间接的静态链路**（入口 → A → 内核 也算违规），
+而且不依赖分块策略 —— 分块是优化手段会变，依赖图不变量不会。
+
+`src/main/external/**` 在允许名单里：那是外部歌单导入的 8 个平台解析器，
+由桥在启动时 import，已核实它们只用 fetch/axios + 正则，不碰 `window.electron`。
+
+## 三之二、图标：CommonJS 默认导出的嵌套包装
+
+`@iconify/icons-tabler/*` 是 CJS 模块（`exports.__esModule = true; exports.default = {...}`）。
+打包器对「CJS 默认导出」有两套约定：
+
+- 认 `__esModule`（Babel/Node 语义）→ `import x` 得到 `{ body }` ✅
+- 不认（直接取 module.exports）→ `import x` 得到 `{ __esModule, default: { body } }` ❌
+
+**实测本项目产物走的是后者**（而且又包了一层），于是传给 `<Icon :icon>` 的是个
+没有 `body` 的对象。Iconify 找不到图标就渲染一个 `viewBox="0 0 16 16"` 的
+**空 svg** —— 不报错、不警告，只是「位置上什么都没显示」，看起来很像 CSS 问题。
+
+所以 `src/mobile/icons.ts` 统一用 `import * as` + `unwrapIcon()` 逐层剥 `default`，
+两种约定下都成立。同时 `verify-layout.mjs` 多了一条通用断言：
+**页面上任何一个 svg 的 innerHTML 为空都算失败**。
+
+## 三之三、时间单位是「秒」
+
+不要凭直觉当成毫秒。三处都是秒：
+
+| 来源 | 验证方式 |
+|---|---|
+| `Song.duration`（列表时长） | 接口返回 `time_length: 155`（= 2:35），上游 `formatDuration(seconds)` |
+| `player.currentTime` / `player.duration` | 上游 `PlayerBar.vue` 的 `formatTime(seconds)` |
+| 原生播放器回调 | 实测一段 5 秒 WAV：`duration = 5`，两秒后 `timePos = 1.936` |
+
+原生插件只在媒体控制那条路上乘 1000（`positionMs`，那是 Android 媒体 API 的单位）。
+按毫秒算的症状：**所有时长显示 0:00**，且不报错。
 
 ## 四、Android 平台结论（都是实测得出，不要凭直觉改）
 

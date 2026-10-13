@@ -29,11 +29,15 @@ const emit = defineEmits<{ select: [song: Song]; longpress: [song: Song] }>();
 const cover = computed(() => props.song.coverUrl || props.song.cover || '');
 const artist = computed(() => props.song.artist || props.song.albumName || '未知歌手');
 const durationText = computed(() => {
+  /**
+   * ⚠️ `song.duration` 的单位是**秒**（上游 `formatDuration(seconds)` 为此）。
+   * 按毫秒算的话每首歌都会显示 0:00，而且不会报错。
+   */
   const total = Number(props.song.duration || 0);
   if (!Number.isFinite(total) || total <= 0) return '';
-  const seconds = Math.floor(total / 1000);
-  const minutes = Math.floor(seconds / 60);
-  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+  const minutes = Math.floor(total / 60);
+  const seconds = Math.floor(total % 60);
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
 });
 
 /**
