@@ -8,27 +8,31 @@
  * ② 进度条 + 左右时间
  * ③ 传输行：循环 · 上一首 · 播放 · 下一首 · 播放列表
  *
- * ⚠️ P2 当前只落**已经能真正工作**的部分：进度、传输、播放模式、队列。
+ * ⚠️ 当前只落**已经能真正工作**的部分：进度、传输、播放模式、队列、歌词。
  * 功能行里的音效/音质/评论/收藏要等各自能力接入后再上 ——
- * 铺一排点了没反应的图标比少一排更糟（这是本项目的一条明确原则）。
+ * 铺一排点了没反应的图标比少一排更糟（本项目的一条明确原则）。
  *
- * ## 为什么播放页是路由而不是浮层
+ * ## 封面 ⇄ 歌词
  *
- * 内核的 `player.isLyricViewOpen` 是桌面用的浮层开关。移动端改用路由：
- * · 系统返回键天然可用（hash 路由入历史），不需要额外注册返回处理器
- * · 转场动画交给路由层，页面切换时可以带方向感
- * · URL 可直达，排查问题时能直接从 devtools 跳进去
+ * 横向滑动切换（左滑看词、右滑回封面），点封面也能切。
+ * 两个面板都常驻挂载，只做 `transform` 平移 —— 这样歌词的滚动位置与
+ * 自动跟随状态在来回切换时不会丢。
+ *
+ * ⚠️ 滑动阈值（72px）与纵向判定：手指在触屏上的滑动天然带纵向分量，
+ * 不判断主方向的话，用户想滚动歌词会变成切到封面。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import Slider from '@mobile/components/Slider.vue';
 import Sheet from '@mobile/components/Sheet.vue';
+import LyricsPanel from './LyricsPanel.vue';
 import {
   formatTime,
   useNowPlaying,
   usePlayModeSwitcher,
   usePlaybackActions,
+  useSmoothPosition,
 } from '@mobile/adapters/player';
 import {
   iconBack,
@@ -41,26 +45,31 @@ import {
 } from '@mobile/icons';
 
 const router = useRouter();
-const { track, hasTrack, isPlaying, isLoading, coverUrl, title, artist, currentTime, duration } =
-  useNowPlaying();
+const { track, hasTrack, isPlaying, isLoading, coverUrl, title, artist } = useNowPlaying();
 const { togglePlay, next, prev, seek, playFromActiveQueue, activeQueue } = usePlaybackActions();
 const { cycle: cyclePlayMode, label: playModeLabel } = usePlayModeSwitcher();
 
+/** 帧级外推的位置：进度条与歌词逐字都靠它，避免采样值一顿一顿 */
+const { positionMs, durationMs, start: startClock, stop: stopClock } = useSmoothPosition();
+
 const queueOpen = ref(false);
-/** 拖动期间进度条跟随手指，松手才 seek */
 const scrubbing = ref(false);
 const scrubValue = ref(0);
 
-/** 封面加载失败时不显示破图（切歌频繁时很容易遇到 404） */
+/** 'cover' | 'lyrics' */
+const panel = ref<'cover' | 'lyrics'>('cover');
+
 const coverFailed = ref(false);
 const showCover = computed(() => Boolean(coverUrl.value) && !coverFailed.value);
 
-const displayTime = computed(() =>
-  scrubbing.value ? scrubValue.value : currentTime.value,
+const displayPositionMs = computed(() =>
+  scrubbing.value ? scrubValue.value : positionMs.value,
 );
+const displayTime = computed(() => formatTime(displayPositionMs.value / 1000));
+const durationText = computed(() => formatTime(durationMs.value / 1000));
 
 const progressValue = computed({
-  get: () => (scrubbing.value ? scrubValue.value : currentTime.value),
+  get: () => (scrubbing.value ? scrubValue.value : positionMs.value),
   set: (value: number) => {
     scrubValue.value = value;
   },
@@ -68,12 +77,39 @@ const progressValue = computed({
 
 const onProgressCommit = (value: number) => {
   scrubbing.value = false;
-  void seek(value);
+  // seek 期望秒
+  void seek(value / 1000);
 };
 
+/* ── 横向滑动切换封面/歌词 ── */
+const SWIPE_THRESHOLD = 72;
+let pointerStartX = 0;
+let pointerStartY = 0;
+let tracking = false;
+
+const onPointerDown = (event: PointerEvent) => {
+  pointerStartX = event.clientX;
+  pointerStartY = event.clientY;
+  tracking = true;
+};
+
+const onPointerUp = (event: PointerEvent) => {
+  if (!tracking) return;
+  tracking = false;
+  const dx = event.clientX - pointerStartX;
+  const dy = event.clientY - pointerStartY;
+  // 纵向为主的滑动是在滚歌词，不切面板
+  if (Math.abs(dx) < SWIPE_THRESHOLD || Math.abs(dx) < Math.abs(dy)) return;
+  panel.value = dx < 0 ? 'lyrics' : 'cover';
+};
+
+const togglePanel = () => {
+  panel.value = panel.value === 'cover' ? 'lyrics' : 'cover';
+};
+
+/* ── 队列 ── */
 const queueSongs = computed(() => activeQueue.value?.songs ?? []);
 const queueTitle = computed(() => activeQueue.value?.title || '播放队列');
-
 const currentQueueIndex = computed(() => {
   const id = String(track.value?.id ?? '');
   if (!id) return -1;
@@ -92,13 +128,21 @@ const goBack = () => {
 };
 
 onMounted(() => {
-  scrubbing.value = false;
+  startClock();
+});
+
+onBeforeUnmount(() => {
+  stopClock();
 });
 
 // 切歌时重置封面失败标记，否则新歌会沿用上一首的失败状态
 watch(coverUrl, () => {
   coverFailed.value = false;
 });
+
+const panelTransform = computed(() =>
+  panel.value === 'lyrics' ? 'translateX(-50%)' : 'translateX(0)',
+);
 </script>
 
 <template>
@@ -107,43 +151,63 @@ watch(coverUrl, () => {
       <button type="button" class="icon-button" aria-label="收起" @click="goBack">
         <Icon :icon="iconBack" width="24" height="24" class="rotate-down" />
       </button>
-      <div class="header-text">
+      <div class="header-text" @click="togglePanel">
         <p class="header-title ellipsis">{{ title || '未在播放' }}</p>
         <p class="header-artist ellipsis">{{ artist }}</p>
       </div>
       <span class="icon-button" aria-hidden="true" />
     </header>
 
-    <div class="player-stage">
-      <div class="cover-wrap" :class="{ 'is-playing': isPlaying }">
-        <img
-          v-if="showCover"
-          class="cover"
-          :src="coverUrl"
-          alt=""
-          @error="coverFailed = true"
-        />
-        <div v-else class="cover cover-placeholder">
-          <Icon :icon="iconMusic" width="56" height="56" />
-        </div>
+    <!-- 封面 / 歌词：同一个滑动容器里的两页 -->
+    <div
+      class="stage"
+      @pointerdown="onPointerDown"
+      @pointerup="onPointerUp"
+      @pointercancel="tracking = false"
+    >
+      <div class="stage-track" :style="{ transform: panelTransform }">
+        <section class="stage-panel stage-cover" @click="togglePanel">
+          <div class="cover-wrap" :class="{ 'is-playing': isPlaying }">
+            <img
+              v-if="showCover"
+              class="cover"
+              :src="coverUrl"
+              alt=""
+              @error="coverFailed = true"
+            />
+            <div v-else class="cover cover-placeholder">
+              <Icon :icon="iconMusic" width="56" height="56" />
+            </div>
+          </div>
+        </section>
+
+        <section class="stage-panel stage-lyrics">
+          <LyricsPanel :position-ms="positionMs" :active="panel === 'lyrics'" />
+        </section>
       </div>
+    </div>
+
+    <!-- 面板指示：两个短横线，当前页加宽 -->
+    <div class="panel-dots" aria-hidden="true">
+      <span class="panel-dot" :class="{ 'is-on': panel === 'cover' }" />
+      <span class="panel-dot" :class="{ 'is-on': panel === 'lyrics' }" />
     </div>
 
     <div class="player-bar">
       <!-- ② 进度条 + 左右时间 -->
       <div class="progress-row">
-        <span class="time">{{ formatTime(displayTime) }}</span>
+        <span class="time">{{ displayTime }}</span>
         <Slider
           v-model="progressValue"
           class="progress-slider"
           :min="0"
-          :max="duration || 1"
-          :disabled="!hasTrack || duration <= 0"
+          :max="durationMs || 1"
+          :disabled="!hasTrack || durationMs <= 0"
           label="播放进度"
           @dragging="scrubbing = $event"
           @commit="onProgressCommit"
         />
-        <span class="time">{{ formatTime(duration) }}</span>
+        <span class="time">{{ durationText }}</span>
       </div>
 
       <!-- ③ 传输行：循环 · 上一首 · 播放 · 下一首 · 播放队列 -->
@@ -174,13 +238,7 @@ watch(coverUrl, () => {
           :disabled="!hasTrack && !queueSongs.length"
           @click="togglePlay()"
         >
-          <Icon
-            v-if="isLoading"
-            :icon="iconPlay"
-            width="26"
-            height="26"
-            class="pulse"
-          />
+          <Icon v-if="isLoading" :icon="iconPlay" width="26" height="26" class="pulse" />
           <Icon v-else :icon="isPlaying ? iconPause : iconPlay" width="26" height="26" />
         </button>
 
@@ -243,7 +301,7 @@ watch(coverUrl, () => {
   display: flex;
   align-items: center;
   gap: var(--sp-2);
-  padding: var(--safe-top) var(--sp-3) var(--sp-2);
+  padding: var(--safe-top) var(--sp-3) 0;
 }
 
 .icon-button {
@@ -284,10 +342,27 @@ watch(coverUrl, () => {
   color: var(--text-secondary);
 }
 
-/* ── 封面 ── */
-.player-stage {
+/* ── 舞台：封面与歌词两页横向滑动 ── */
+.stage {
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+}
+
+.stage-track {
+  display: flex;
+  width: 200%;
+  height: 100%;
+  transition: transform var(--duration-slow) var(--ease-standard);
+}
+
+.stage-panel {
+  width: 50%;
+  height: 100%;
+  flex: 0 0 50%;
+}
+
+.stage-cover {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -296,7 +371,7 @@ watch(coverUrl, () => {
 
 .cover-wrap {
   /* 正方形 + 不超过可用高度：横屏时封面不会把整页顶开 */
-  width: min(100%, 62dvh);
+  width: min(100%, 56dvh);
   aspect-ratio: 1;
   border-radius: var(--radius-xl);
   overflow: hidden;
@@ -305,8 +380,7 @@ watch(coverUrl, () => {
   transition: transform var(--duration-slow) var(--ease-standard);
 }
 
-/* 播放中轻微放大：给"正在响"一个静态可见的信号（不做旋转，封面旋转在
-   大图上会让人晕，参考产品也只在下标栏的小圆钮上转） */
+/* 播放中轻微放大：给"正在响"一个静态可见的信号（不做旋转，大图旋转会让人晕） */
 .cover-wrap.is-playing {
   transform: scale(1.015);
 }
@@ -322,6 +396,31 @@ watch(coverUrl, () => {
   align-items: center;
   justify-content: center;
   color: var(--text-tertiary);
+}
+
+/* ── 面板指示 ── */
+.panel-dots {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  height: 16px;
+}
+
+.panel-dot {
+  width: 12px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--divider-strong);
+  transition:
+    width var(--duration-normal) var(--ease-standard),
+    background var(--duration-normal) var(--ease-standard);
+}
+
+.panel-dot.is-on {
+  width: 20px;
+  background: var(--accent);
 }
 
 /* ── 底栏三段 ── */

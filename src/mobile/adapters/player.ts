@@ -17,6 +17,7 @@ import { computed, ref } from 'vue';
 import type { Song } from '@/models/song';
 import type { PlayMode } from '@shared/playback';
 import { usePlayerStore } from '@/stores/player';
+import { useLyricStore } from '@/stores/lyric';
 import { usePlaylistStore, MANUAL_PLAYBACK_QUEUE_ID } from '@/stores/playlist';
 import { useHistoryStore } from '@/stores/historyStore';
 import { waitForSqlitePersistHydration } from '@/stores/sqlitePersist';
@@ -259,6 +260,120 @@ export const usePlayModeSwitcher = () => {
     return nextMode;
   };
   return { current, cycle, label: computed(() => PLAY_MODE_LABELS[current.value]) };
+};
+
+/* ────────────────────────────────────────────────────────────
+   平滑播放位置
+   ──────────────────────────────────────────────────────────── */
+
+/**
+ * 平滑的播放位置（毫秒）。
+ *
+ * 引擎的 `currentTime` 是**采样值**（原生侧按定时器上报，间隔远大于一帧），
+ * 直接拿去驱动进度条会一格一格地跳，拿去驱动歌词逐字高亮更是完全不能用。
+ *
+ * 做法：用 `requestAnimationFrame` 在两次采样之间线性外推：
+ * · 采样值一变就记下『这个值是什么时候拿到的』；
+ * · 播放中用 `采样值 + (现在 - 采样时间) × 倍速` 作为当前值；
+ * · 暂停/缓冲时不做外推（否则暂停后进度还会自己往前走）。
+ *
+ * 用 `playbackClock` 而不是 `currentTime`：前者把单位转换（秒 → 毫秒）和
+ * 传输状态（isAdvancing）都算好了，避免又一处单位判断。
+ *
+ * 返回值用完即停（组件卸载时调用 `stop`），不要在页面外常驻 rAF。
+ */
+export const useSmoothPosition = () => {
+  const player = usePlayerStore();
+  const positionMs = ref(0);
+  const durationMs = computed(() => Number(player.playbackClock?.durationMs ?? 0));
+
+  let frame = 0;
+  let sampledPosition = 0;
+  let sampledAt = 0;
+
+  const step = () => {
+    const clock = player.playbackClock;
+    const raw = Number(clock?.positionMs ?? 0);
+    const now = performance.now();
+
+    if (raw !== sampledPosition) {
+      sampledPosition = raw;
+      sampledAt = now;
+    }
+
+    const rate = Number(clock?.playbackRate ?? 1) || 1;
+    const projected = clock?.isAdvancing
+      ? sampledPosition + (now - sampledAt) * rate
+      : sampledPosition;
+
+    const durationMs = Number(clock?.durationMs ?? 0);
+    positionMs.value = durationMs > 0 ? Math.min(projected, durationMs) : projected;
+
+    frame = window.requestAnimationFrame(step);
+  };
+
+  const start = () => {
+    if (frame) return;
+    sampledPosition = 0;
+    sampledAt = performance.now();
+    frame = window.requestAnimationFrame(step);
+  };
+
+  const stop = () => {
+    if (!frame) return;
+    window.cancelAnimationFrame(frame);
+    frame = 0;
+  };
+
+  return { positionMs, durationMs, start, stop };
+};
+
+/* ────────────────────────────────────────────────────────────
+   歌词
+   ──────────────────────────────────────────────────────────── */
+
+/**
+ * 歌词视图数据。
+ *
+ * **不需要自己拉歌词** —— 内核的 player store 在切歌时会调
+ * `lyricStore.fetchLyrics(hash, ...)`，并且用播放时钟驱动
+ * `updateCurrentIndex()`。这里只负责读。
+ *
+ * ⚠️ 渲染用 `displayLines` 而不是 `lines`：前者已经过用户配置的
+ * 正则过滤与简繁转换，且与 `currentIndex` 索引对齐。
+ */
+export const useLyrics = () => {
+  const lyric = useLyricStore();
+
+  const lines = computed(() => lyric.displayLines ?? []);
+  const currentIndex = computed(() => lyric.currentIndex);
+  const isLoading = computed(() => lyric.isLoading);
+  /** 无歌词时显示的原因文本（内核给的是人话，如「纯音乐，请欣赏」） */
+  const tips = computed(() => lyric.tips || '暂无歌词');
+  const hasLines = computed(() => lines.value.length > 0);
+
+  const showTranslation = computed(() => lyric.showTranslation);
+  const showRomanization = computed(() => lyric.showRomanization);
+
+  /** 点击某行 → 跳到该行时间点（秒） */
+  const seekToLine = (index: number) => {
+    const line = lines.value[index];
+    if (!line) return;
+    // 用内核算好的有效偏移回退，否则用户调过偏移后点击跳转会偏
+    const offsetMs = Number(lyric.currentTimeOffset ?? 0);
+    void usePlayerStore().seek(Math.max(0, line.time - offsetMs / 1000));
+  };
+
+  return {
+    lines,
+    currentIndex,
+    isLoading,
+    tips,
+    hasLines,
+    showTranslation,
+    showRomanization,
+    seekToLine,
+  };
 };
 
 /** 播放页是否打开（移动端用路由控制，这里只是给外壳按钮用） */
