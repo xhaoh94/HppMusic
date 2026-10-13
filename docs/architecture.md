@@ -156,7 +156,7 @@ Capacitor 自带的 XHR 补丁还不支持 `responseType`，所以二进制请�
 （键前缀 `echo.mobile.kv.`）。pinia 持久化插件 `sqlitePersistPlugin` 因此落在 localStorage 上，
 容器约 5MB，足够设置与队列快照。
 
-## 六、KuGou 接口的坑（都实测过，加新功能前先看这里）
+## 五、KuGou 接口的坑（都实测过，加新功能前先看这里）
 
 上游没有文档，这些结论全部是拿真机请求试出来的。共同特征是
 **不报错、只是数据不对**，所以很难靠报错日志发现。
@@ -176,7 +176,7 @@ Capacitor 自带的 XHR 补丁还不支持 `responseType`，所以二进制请�
 - 风控挑战会让 `utils/request.ts` **挂起直到挑战被解决或取消**。
   界面上必须有验证浮层，否则表现为「按钮一直转、连错误都不报」。
 
-## 七、为什么不用 Tailwind
+## 六、为什么不用 Tailwind
 
 桌面渲染层用 Tailwind 4，而 Tailwind 的内容扫描根是**项目目录**。移动端目录扫不到
 `../src/renderer` 时，`flex-1` / `min-w-0` / `w-screen` 这类类名**一个都不会生成**
