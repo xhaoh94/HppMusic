@@ -2,19 +2,24 @@
 /**
  * 我的。
  *
- * P0 只做「账号 + 设置入口 + 退出登录」这三件真正能用的事，
- * 不铺一排点了没反应的图标（那是最容易被当成"做坏了"的形态）。
+ * 只做真正能用的事：账号信息、三个真实的数据入口（收藏 / 历史 / 我的歌单）、
+ * 设置、退出登录。不铺一排点了没反应的图标 —— 前身项目的「我的」页有 8 个入口，
+ * 其中 5 个点进去是空白。
  */
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
-import { iconAlbum, iconFavorite, iconSettings, iconUser } from '@mobile/icons';
+import { iconAlbum, iconFavorite, iconHistory, iconSettings, iconUser } from '@mobile/icons';
 import { useUserStore } from '@/stores/user';
+import { usePlaylistStore } from '@/stores/playlist';
+import { useHistoryStore } from '@/stores/historyStore';
 import { useToastStore } from '@/stores/toast';
 import Sheet from '@mobile/components/Sheet.vue';
 
 const router = useRouter();
 const user = useUserStore();
+const playlist = usePlaylistStore();
+const history = useHistoryStore();
 const toast = useToastStore();
 
 const confirmOpen = ref(false);
@@ -23,15 +28,58 @@ const nickname = computed(() => user.info?.nickname || user.info?.username || '�
 const avatar = computed(() => String(user.info?.pic || ''));
 const userId = computed(() => String(user.info?.userid ?? ''));
 
-/** P2 接入的入口；先列出但明确标注，而不是让点击静默失败 */
-const pendingEntries = [
-  { key: 'favorites', title: '我的收藏', icon: iconFavorite },
-  { key: 'history', title: '播放历史', icon: iconAlbum },
-];
+/**
+ * 入口右侧的计数。
+ *
+ * 只在**已经加载过**的时候显示数字：没加载过就显示 `—`，
+ * 而不是显示 0 —— 0 会被理解成"确实没有收藏"，与"还没拉取"是两件事。
+ */
+const favoriteCount = computed(() =>
+  playlist.favoritesLoaded ? String(playlist.favorites.length) : '',
+);
+const playlistCount = computed(() =>
+  playlist.userPlaylists.length ? String(playlist.userPlaylists.length) : '',
+);
+const historyCount = computed(() =>
+  history.hydrated ? String(history.entries.length) : '',
+);
 
-const onPending = (title: string) => {
-  toast.info(`「${title}」将在歌单与播放接入后开放`);
-};
+const entries = computed(() => [
+  {
+    key: 'favorites',
+    title: '我的收藏',
+    subtitle: '我喜欢',
+    icon: iconFavorite,
+    value: favoriteCount.value,
+    to: { name: 'favorites' },
+  },
+  {
+    key: 'playlists',
+    title: '我的歌单',
+    subtitle: '自建与收藏的歌单',
+    icon: iconAlbum,
+    value: playlistCount.value,
+    to: { name: 'my-playlists' },
+  },
+  {
+    key: 'history',
+    title: '播放历史',
+    subtitle: '本机记录，无需登录',
+    icon: iconHistory,
+    value: historyCount.value,
+    to: { name: 'history' },
+  },
+  {
+    key: 'settings',
+    title: '设置',
+    subtitle: '播放、音质、歌词与数据',
+    icon: iconSettings,
+    value: '',
+    to: { name: 'settings' },
+  },
+]);
+
+const open = (to: { name: string }) => void router.push(to);
 
 const doLogout = () => {
   confirmOpen.value = false;
@@ -56,20 +104,18 @@ const doLogout = () => {
 
     <nav class="entries">
       <button
-        v-for="entry in pendingEntries"
+        v-for="entry in entries"
         :key="entry.key"
         type="button"
         class="entry"
-        @click="onPending(entry.title)"
+        @click="open(entry.to)"
       >
         <Icon :icon="entry.icon" width="20" height="20" class="entry-icon" />
-        <span class="entry-title">{{ entry.title }}</span>
-        <span class="entry-note">即将开放</span>
-      </button>
-
-      <button type="button" class="entry" @click="router.push({ name: 'settings' })">
-        <Icon :icon="iconSettings" width="20" height="20" class="entry-icon" />
-        <span class="entry-title">设置</span>
+        <span class="entry-text">
+          <span class="entry-title">{{ entry.title }}</span>
+          <span v-if="entry.subtitle" class="entry-subtitle">{{ entry.subtitle }}</span>
+        </span>
+        <span v-if="entry.value" class="entry-value">{{ entry.value }}</span>
       </button>
     </nav>
 
@@ -148,7 +194,7 @@ const doLogout = () => {
   display: flex;
   align-items: center;
   gap: var(--sp-4);
-  min-height: 56px;
+  min-height: 60px;
   padding: 0 var(--sp-3);
   border-radius: var(--radius-md);
   text-align: left;
@@ -163,16 +209,29 @@ const doLogout = () => {
   color: var(--text-secondary);
 }
 
-.entry-title {
+.entry-text {
   flex: 1;
   min-width: 0;
-  font-size: var(--font-md);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
-.entry-note {
-  flex: 0 0 auto;
+.entry-title {
+  font-size: var(--font-md);
+  color: var(--text-primary);
+}
+
+.entry-subtitle {
   font-size: var(--font-xs);
   color: var(--text-tertiary);
+}
+
+.entry-value {
+  flex: 0 0 auto;
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 
 .footer {

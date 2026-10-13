@@ -72,6 +72,24 @@ export const router = createRouter({
       component: () => import('@mobile/features/profile/ProfilePage.vue'),
       meta: { title: '我的' },
     },
+    {
+      path: '/favorites',
+      name: 'favorites',
+      component: () => import('@mobile/features/favorites/FavoritesPage.vue'),
+      meta: { title: '我的收藏' },
+    },
+    {
+      path: '/history',
+      name: 'history',
+      component: () => import('@mobile/features/history/HistoryPage.vue'),
+      meta: { title: '播放历史' },
+    },
+    {
+      path: '/my-playlists',
+      name: 'my-playlists',
+      component: () => import('@mobile/features/my-playlists/MyPlaylistsPage.vue'),
+      meta: { title: '我的歌单' },
+    },
 
     // ── 详情页 ──
     {
