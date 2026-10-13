@@ -1,0 +1,41 @@
+# 统一换行符为 LF，避免 Windows 开发者与 CI 之间产生整文件的 CRLF 噪声 diff。
+#
+# 这一条对本项目尤其重要：`scripts/sync-upstream.mjs` 的 rewrites 是按**文本锚点**
+# 匹配的，`scripts/build-kugou-api.mjs` 的补丁也依赖上游文件的行尾形态。
+# 如果行尾随平台变化，锚点匹配就会时灵时不灵（上游 module 是 CRLF，
+# 打包脚本内部已经做了归一化，但那属于兜底，不该依赖）。
+* text=auto eol=lf
+
+# 二进制文件不要做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.jar binary
+*.apk binary
+*.aab binary
+*.keystore binary
+*.jks binary
+*.so binary
+*.node binary
+
+# 文本文件保持 LF
+*.ts text eol=lf
+*.tsx text eol=lf
+*.vue text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.css text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.java text eol=lf
+*.gradle text eol=lf
+*.xml text eol=lf
+*.sh text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+# gradlew 必须保持可执行位与 LF，否则 Linux/CI 上无法直接执行
+gradlew text eol=lf
