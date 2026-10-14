@@ -23,7 +23,7 @@ import { isLyricLineFiltered, resolveVisibleLyricIndex } from '@/utils/lyricFilt
 import { usePlaylistStore, MANUAL_PLAYBACK_QUEUE_ID } from '@/stores/playlist';
 import { useHistoryStore } from '@/stores/historyStore';
 import { waitForSqlitePersistHydration } from '@/stores/sqlitePersist';
-import { playSongInContext } from '@/utils/playback';
+import { replaceQueueAndPlay } from '@/utils/playback';
 import logger from '@/utils/logger';
 
 /* ────────────────────────────────────────────────────────────
@@ -141,12 +141,23 @@ export const usePlaybackActions = () => {
   /**
    * 在某个上下文列表里播放一首歌。
    *
-   * 走内核的 `playSongInContext` 而不是自己拼 `setPlaybackQueueWithOptions` +
-   * `playTrack`：那里面有一堆非平凡的处理（不可播曲目过滤与计数、随机模式的
-   * 起播曲目选择、重复请求去重、`filteredInvalidCount` 计算），自己实现必然遗漏。
+   * ⚠️ 必须用 `replaceQueueAndPlay`（**整个列表替换队列**），
+   * 而不是看起来更合适的 `playSongInContext`：
+   *
+   * `playSongInContext(store, player, song, contextSongs, ..., { queueId })`
+   * 在 `contextSongs.length > 0 && options.queueId` 时会**转走 `queueAndPlaySong`**
+   * —— 那是"把单首歌追加进队列"的语义。于是传 30 首上下文进去，
+   * 队列里只会有 1 首（加上队列里原有的），表现为"播完这首就停"。
+   *
+   * 实测：每日推荐点"播放全部"后 `activeQueue.songs.length === 2`（应该是 30）。
+   *
+   * `replaceQueueAndPlay` 才是"用这个列表当播放队列，并从指定那首开始放"，
+   * 并且内部已经处理了不可播曲目过滤与计数、随机模式起播曲目选择、
+   * 重复请求去重。
    */
   const playSong = async (song: Song, context: Song[], meta: PlayQueueMeta): Promise<boolean> => {
-    const started = await playSongInContext(playlist, player, song, context, 0, {
+    const list = context.length ? context : [song];
+    const started = await replaceQueueAndPlay(playlist, player, list, 0, song, {
       queueId: meta.queueId,
       title: meta.title,
       subtitle: meta.subtitle ?? '',
@@ -159,7 +170,7 @@ export const usePlaybackActions = () => {
     return started;
   };
 
-  /** 播放（或在一个"临时列表"里播放：歌单/专辑/榜单详情页用） */
+  /** 把整个列表当队列并从 startIndex 开始播（"播放全部"用） */
   const playList = async (
     list: Song[],
     meta: PlayQueueMeta,
