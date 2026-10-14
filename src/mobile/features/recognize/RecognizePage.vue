@@ -23,6 +23,7 @@ import { usePlaybackActions } from '@mobile/adapters/player';
 import { pushBackHandler } from '@bridge/backButton';
 import type { RecognizeMatch } from '@/utils/mappers';
 import type { Song } from '@/models/song';
+import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
 
 const router = useRouter();
 const { playSong } = usePlaybackActions();
@@ -70,10 +71,14 @@ onMounted(() => {
     dispose();
   });
 });
+/** 给「定位到当前播放」用：识别结果是 { song, confidence } 包装 */
+const locateSongs = computed(() => matches.value.map((match) => match.song));
 </script>
 
 <template>
   <div class="recognize-page">
+    <!-- 定位到正在播放：列表长时不用自己翻 -->
+    <LocateCurrentButton :songs="locateSongs" />
     <PageHeader title="听歌识曲">
       <template #actions>
         <button
@@ -161,6 +166,8 @@ onMounted(() => {
 
 <style scoped>
 .recognize-page {
+  /* 定位按钮的绝对定位参照 */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

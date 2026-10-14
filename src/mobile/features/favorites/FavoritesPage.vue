@@ -17,6 +17,7 @@ import { usePlaybackActions } from '@mobile/adapters/player';
 import { useToastStore } from '@/stores/toast';
 import logger from '@/utils/logger';
 import type { Song } from '@/models/song';
+import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
 
 const router = useRouter();
 const playlist = usePlaylistStore();
@@ -89,6 +90,8 @@ onMounted(() => {
 
 <template>
   <div class="favorites-page">
+    <!-- 定位到正在播放：列表长时不用自己翻 -->
+    <LocateCurrentButton :songs="songs" />
     <PageHeader title="我的收藏">
       <template #actions>
         <button
@@ -145,6 +148,8 @@ onMounted(() => {
 
 <style scoped>
 .favorites-page {
+  /* 定位按钮的绝对定位参照 */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

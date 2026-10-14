@@ -10,6 +10,7 @@
 import { computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import { iconMusic } from '@mobile/icons';
+import { songKeyOf } from '@mobile/utils/songKey';
 import type { Song } from '@/models/song';
 
 const props = withDefaults(
@@ -23,6 +24,12 @@ const props = withDefaults(
   }>(),
   { index: -1, showIndex: false, active: false },
 );
+
+/**
+ * 定位键：写在 DOM 的 `data-song-key` 上，供「定位到当前播放」查找本行。
+ * 取值规则见 @mobile/utils/songKey。
+ */
+const songKey = computed(() => songKeyOf(props.song));
 
 const emit = defineEmits<{ select: [song: Song]; longpress: [song: Song] }>();
 
@@ -80,6 +87,7 @@ const onClick = () => {
   <div
     class="song-row"
     :class="{ 'is-active': active }"
+    :data-song-key="songKey"
     role="button"
     tabindex="0"
     @pointerdown="onPointerDown"

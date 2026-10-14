@@ -20,6 +20,7 @@ import { mapPlaylistMeta, parsePlaylistTracks } from '@/utils/mappers';
 import logger from '@/utils/logger';
 import type { PlaylistMeta } from '@/models/playlist';
 import type { Song } from '@/models/song';
+import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
 
 const route = useRoute();
 const { playList, playSong } = usePlaybackActions();
@@ -108,6 +109,8 @@ watch(
 
 <template>
   <div class="detail-page">
+    <!-- 定位到正在播放：列表长时不用自己翻 -->
+    <LocateCurrentButton :songs="songs.items.value" />
     <PageHeader title="歌单" />
 
     <div class="detail-body scroll-y">
@@ -153,6 +156,8 @@ watch(
 
 <style scoped>
 .detail-page {
+  /* 定位按钮的绝对定位参照 */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

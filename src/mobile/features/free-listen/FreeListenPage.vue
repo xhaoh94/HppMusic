@@ -46,6 +46,7 @@ import { captureUserSession } from '@/utils/userSession';
 import { useUserStore } from '@/stores/user';
 import logger from '@/utils/logger';
 import type { Song } from '@/models/song';
+import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
 
 /** 组件名：App.vue 的 KeepAlive `:include` 按这个名字匹配（对不上是静默失效，不会报错） */
 defineOptions({ name: 'FreeListenPage' });
@@ -126,6 +127,8 @@ onMounted(() => void load());
 
 <template>
   <div class="free-page">
+    <!-- 定位到正在播放：列表长时不用自己翻 -->
+    <LocateCurrentButton :songs="displayedSongs" />
     <!--
       不放 PageHeader：页面已经在「主页」分区下，顶部子页签栏已经表明当前位置，
       再顶一行「‹ 随便听」是重复信息（用户直接反馈过）。
@@ -209,6 +212,8 @@ onMounted(() => void load());
 
 <style scoped>
 .free-page {
+  /* 定位按钮的绝对定位参照 */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

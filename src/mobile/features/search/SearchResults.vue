@@ -20,6 +20,7 @@ import {
   type SearchItemView,
 } from '@mobile/adapters/search';
 import type { Song } from '@/models/song';
+import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
 
 const props = defineProps<{ keywords: string }>();
 
@@ -96,10 +97,20 @@ const cardView = (item: SearchItemView['item']) => {
   }
   return { cover: '', title: '', subtitle: '', round: false, onSelect: () => {} };
 };
+/** 给「定位到当前播放」用：只有单曲/歌词 tab 是歌曲行，其余是两列栅格 */
+const locateSongs = computed(() =>
+  isCardTab.value
+    ? []
+    : (list.items.value as { item: { song?: Song } }[])
+        .map((entry) => entry.item?.song)
+        .filter((song): song is Song => Boolean(song)),
+);
 </script>
 
 <template>
   <div class="search-results">
+    <!-- 定位到正在播放：列表长时不用自己翻 -->
+    <LocateCurrentButton :songs="locateSongs" />
     <nav class="tabs scroll-x" aria-label="搜索结果分类">
       <button
         v-for="tab in SEARCH_TABS"
@@ -174,6 +185,8 @@ const cardView = (item: SearchItemView['item']) => {
 
 <style scoped>
 .search-results {
+  /* 定位按钮的绝对定位参照 */
+  position: relative;
   display: flex;
   flex-direction: column;
   flex: 1;

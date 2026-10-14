@@ -19,6 +19,7 @@ import { useHistoryStore } from '@/stores/historyStore';
 import { usePlaybackActions } from '@mobile/adapters/player';
 import { useToastStore } from '@/stores/toast';
 import type { Song } from '@/models/song';
+import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
 
 interface LocalHistoryEntry {
   song: Song;
@@ -114,10 +115,14 @@ const formatPlayedAt = (timestamp: number) => {
 onMounted(() => {
   void history.hydrate();
 });
+/** 给「定位到当前播放」用：历史行是包装对象，取里面的 song */
+const locateSongs = computed(() => rows.value.map((row) => row.song));
 </script>
 
 <template>
   <div class="history-page">
+    <!-- 定位到正在播放：列表长时不用自己翻 -->
+    <LocateCurrentButton :songs="locateSongs" />
     <PageHeader title="播放历史">
       <template #actions>
         <button
@@ -177,6 +182,8 @@ onMounted(() => {
 
 <style scoped>
 .history-page {
+  /* 定位按钮的绝对定位参照 */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

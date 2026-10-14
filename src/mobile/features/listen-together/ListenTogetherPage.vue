@@ -34,6 +34,8 @@ import { useListenTogetherStore } from '@/stores/listenTogether';
 import { usePlayerStore } from '@/stores/player';
 import { useToastStore } from '@/stores/toast';
 import logger from '@/utils/logger';
+import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
+import { songKeyOf } from '@mobile/utils/songKey';
 
 /** 组件名：App.vue 的 KeepAlive `:include` 按这个名字匹配（对不上是静默失效，不会报错） */
 defineOptions({ name: 'ListenTogetherPage' });
@@ -303,6 +305,14 @@ const goBackToList = () => {
 <template>
   <div class="lt-page">
     <!--
+      定位到正在播放。bottom 抬高是为了避开底部的聊天输入框（不是 FAB ——
+      那个「＋」只存在于未进房间的列表视图）。
+
+      房间队列是自定义渲染的 `.song-item`（不是 SongRow），所以上面给它单独加了
+      `data-song-key`：不加的话按钮会出现、但点下去找不到目标行，等于没反应。
+    -->
+    <LocateCurrentButton :songs="songList" bottom="84px" />
+    <!--
       不放 PageHeader：页面在「主页」分区下，顶部子页签栏已表明位置。
       功能性按钮改成了不占布局高度的形式：列表页用右下角悬浮钮（FAB），
       房间内把「退出房间」放到房间信息行右侧。
@@ -358,6 +368,7 @@ const goBackToList = () => {
           :key="song.id"
           type="button"
           class="song-item"
+          :data-song-key="songKeyOf(song)"
           @click="requestSong(song)"
         >
           <span class="song-title ellipsis">{{ song.title }}</span>
@@ -536,6 +547,8 @@ const goBackToList = () => {
 
 <style scoped>
 .lt-page {
+  /* 定位按钮的绝对定位参照 */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;

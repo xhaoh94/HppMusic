@@ -22,6 +22,7 @@ import { mapRankSong, mapRankMeta } from '@/utils/mappers';
 import logger from '@/utils/logger';
 import type { RankMeta } from '@/models/rank';
 import type { Song } from '@/models/song';
+import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
 
 const route = useRoute();
 const { playSong, playList } = usePlaybackActions();
@@ -80,6 +81,8 @@ watch(
 
 <template>
   <div class="rank-page">
+    <!-- 定位到正在播放：列表长时不用自己翻 -->
+    <LocateCurrentButton :songs="songs.items.value" />
     <PageHeader :title="meta?.name || '排行榜'">
       <template #actions>
         <button
@@ -128,6 +131,8 @@ watch(
 
 <style scoped>
 .rank-page {
+  /* 定位按钮的绝对定位参照 */
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
