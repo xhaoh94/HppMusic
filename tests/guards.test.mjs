@@ -14,8 +14,8 @@ import { describe, expect, it } from 'vitest';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const runNode = (script) =>
-  execFileSync('node', [path.join(ROOT, 'scripts', script)], {
+const runNode = (script, ...args) =>
+  execFileSync('node', [path.join(ROOT, 'scripts', script), ...args], {
     cwd: ROOT,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -28,8 +28,18 @@ describe('架构边界', () => {
 });
 
 describe('上游内核 vendor 闭包', () => {
+  /**
+   * ⚠️ 跑 `--check`，不要跑完整同步。
+   *
+   * 完整同步会回写 upstream.json 的 `syncedAt`，于是**每次 `pnpm test` 之后
+   * 工作区都是脏的** —— 最近几个 commit 里都夹带着这个毫无意义的改动。
+   *
+   * `--check` 已经覆盖了解析与别名自检（有未解析的导入会在复制之前 `process.exit(1)`），
+   * 足够守住这条断言；而"复制目标路径不存在"这类问题在实际同步时会立刻炸出来，
+   * 不该由测试来制造副作用。
+   */
   it('内核的每一个导入都能解析（含相对路径）', () => {
-    expect(() => runNode('sync-upstream.mjs')).not.toThrow();
+    expect(() => runNode('sync-upstream.mjs', '--check')).not.toThrow();
   });
 
   it('upstream.json 声明了 vendor 来源 commit', () => {
