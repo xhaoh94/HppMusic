@@ -129,4 +129,18 @@ watch(
   font-size: var(--font-xs);
   color: var(--text-secondary);
 }
+
+/*
+ * ⚠️ flex column 的**交叉轴**（宽度）也会被 `min-width: auto` 撑开。
+ *
+ * 光靠 `.ellipsis` 的 `overflow: hidden` 不够 —— 按规范它应当让自动最小尺寸算成 0，
+ * 但实测没有：排行榜里某张卡的副标题是 53 字的描述，宽 544px，而卡片只有 198px，
+ * 文字直接伸出屏幕。这里把上限显式钉住（标题同样需要，它靠 `-webkit-line-clamp`
+ * 做两行截断，同样不能先被撑开）。
+ */
+.card-title,
+.card-subtitle {
+  min-width: 0;
+  max-width: 100%;
+}
 </style>
