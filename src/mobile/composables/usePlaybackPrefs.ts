@@ -55,10 +55,36 @@ watch(
   { deep: true },
 );
 
-/** 切入歌曲列表页时，自动播放第一首并打开播放页 */
+/**
+ * 「进入列表页时自动播 + 打开播放页」在**本次会话里**是否已经触发过。
+ *
+ * ## 为什么要这个名额
+ *
+ * 需求是"**只有首次**进入才触发"。只看"现在没在播"是不够的：
+ * 用户在播放页暂停 → 返回列表 → 切去别的页签 → 再切回来，
+ * 这时"没在播"依然成立，于是又被弹进播放页、又重新出声 —— 死活回不到列表。
+ *
+ * 所以用一个**一次性名额**：认领过就作废，后续进入一律静默停在列表页。
+ * 名额是模块级变量，进程重启即归还 —— 也就是"每次冷启动后的第一次进入"。
+ */
+let autoEnterConsumed = false;
+
+/** 认领本次会话的「进入即自动播」名额。返回 true 表示这次由调用方触发。 */
+export const claimAutoEnterOnce = (): boolean => {
+  if (autoEnterConsumed) return false;
+  autoEnterConsumed = true;
+  return true;
+};
+
+/** 切入歌曲列表页时，自动播放第一首并打开播放页（**仅本次会话首次**） */
 export const autoPlayAndOpenOnEnter = computed({
   get: () => prefs.value.autoPlayAndOpen,
   set: (value: boolean) => {
+    /**
+     * 重新打开开关 = 用户又想要这个行为，把名额还回去。
+     * 不还的话：用户关掉试一下、再打开，会发现"怎么没反应了" —— 名额在第一次就用掉了。
+     */
+    if (value) autoEnterConsumed = false;
     prefs.value = { ...prefs.value, autoPlayAndOpen: value };
   },
 });

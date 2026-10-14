@@ -11,8 +11,9 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import {
   autoPlayAndOpenOnEnter,
+  claimAutoEnterOnce,
 } from '@mobile/composables/usePlaybackPrefs';
-import { ensureFreeListenPlaying } from '@mobile/adapters/freeListen';
+import { ensureFreeListenReady } from '@mobile/adapters/freeListen';
 import { pinia } from '@mobile/store';
 
 /**
@@ -206,7 +207,7 @@ router.beforeEach(async (to) => {
 });
 
 /**
- * 「进入随便听时自动播 + 进播放页」。
+ * 「进入随便听时自动播 + 进播放页」（**只在本次会话首次进入时**）。
  *
  * ## 为什么放在守卫里，而不是页面里做
  *
@@ -214,20 +215,26 @@ router.beforeEach(async (to) => {
  * 用户看到的是**列表闪一下再跳走**。放在守卫里就能在进入前直接改道，
  * 列表根本不渲染。
  *
- * ## 为什么从播放页返回时不再跳
+ * ## 三道闸门，缺一个都会出问题
  *
- * 返回时「没在播」这个条件同样成立（用户可能刚暂停），于是又被弹回播放页 ——
- * 死活出不去。所以显式排除来源是播放页的情况：那时用户要的就是看列表。
+ * 1. **开关** —— 用户没开就不该自动跳；
+ * 2. **来源不是播放页** —— 从播放页返回时「没在播」同样成立（用户可能刚暂停），
+ *    不看这个就会把人又弹回去，死活出不去；
+ * 3. **一次性名额**（`claimAutoEnterOnce`）—— 切去别的页签再切回来时，
+ *    前两条依然成立，于是又被弹进播放页并重新出声。
+ *    认领过就作废，之后进入一律静默停在列表。
+ *
+ * 名额在「用户重新打开开关」时归还（见 usePlaybackPrefs）。
  *
  * ⚠️ 注册在**登录守卫之后**：未登录时应该先去登录页，而不是被带去看播放页。
  */
 router.beforeEach((to, from) => {
   if (to.name !== 'free-listen') return true;
   if (!autoPlayAndOpenOnEnter.value) return true;
-  // 从播放页返回 → 停在列表
   if (from.name === 'player') return true;
+  if (!claimAutoEnterOnce()) return true;
 
   // 不 await：等它回来才放行的话，又变成"（空白）等一会儿再跳"，等于把延迟搬到别处。
-  void ensureFreeListenPlaying();
+  void ensureFreeListenReady();
   return { name: 'player' };
 });

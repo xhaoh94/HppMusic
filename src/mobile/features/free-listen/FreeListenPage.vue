@@ -118,12 +118,25 @@ const clearSearch = () => {
  *
  * 是否跳播放页由设置里的「点歌后进入播放页」决定（默认关）。两种都合理：
  * 关着方便连着试听几首；开着则是"挑了就走"，不用再多点一次。
+ *
+ * ⚠️ **先跳页、再起播**（不 await 起播链路）。`playSong` 内部要等一次"拉播放地址"的
+ * 网络往返，慢的时候几百毫秒起步，等它回来再 `router.push` 就是用户感觉到的
+ * "点了没反应"。
+ *
+ * 为什么先跳也不会闪上一首：队列是**同步**设好的 —— 内核 `replaceQueueAndPlay` 里
+ * `setPlaybackQueueWithOptions` 在 `playTrack` 的 await **之前**执行，
+ * 所以播放页一进去就读到正确的曲目；只有播放地址与真正出声会晚一点，
+ * 那时播放页自己显示加载态，比"点下去没动静"可解释得多。
  */
-const onSelect = async (song: Song) => {
+const onSelect = (song: Song) => {
   const context = displayedSongs.value;
-  const started = await playSong(song, context, QUEUE_META);
-  if (started && openPlayerOnSelect.value) void router.push({ name: 'player' });
+  if (openPlayerOnSelect.value) void router.push({ name: 'player' });
+  void playSong(song, context, QUEUE_META).catch((error) => {
+    // 原来这里是 await，reject 会变成未处理的 Promise rejection；显式接住，只记日志
+    logger.warn('FreeListen', 'Play failed', error);
+  });
 };
+
 
 /**
  * 当前活动队列是不是本页开的那个。

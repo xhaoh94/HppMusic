@@ -82,26 +82,23 @@ export const isFreeListenQueueReady = (): boolean => {
 };
 
 /**
- * 确保随便听在放。
+ * 确保随便听的**队列**就绪（**不碰播放状态**）。
  *
- * 两种情形：
- * · 队列已经是随便听的**且有歌** —— 那就不该重新拉（否则每次切页签都换一批歌），
- *   但它可能只是**暂停着**（用户从播放页暂停后退出去），所以要续播；
- * · 否则拉一批从第一首开播。
+ * ## 为什么不再"没在播就续播"
  *
- * 先写成"只在不是本队列时才拉"，结果第二种情形漏了 —— 跳到播放页后是暂停状态，
- * 看着像没生效。
+ * 原来是：队列已就绪但暂停中 → `togglePlay()` 续播。于是"用户暂停 → 切走 → 切回来"
+ * 会被强行出声 —— 用户要的是回列表看看，不是接着放。
+ * 现在只在**队列还没建起来**（`isFreeListenQueueReady()` 为假）时才拉一批，
+ * 那时确实没有可播的内容；队列已有内容就原样保留（可能在播、也可能暂停）。
+ *
+ * 起不起播、要不要改道去播放页，由调用方（路由守卫）自己决定。
  */
-export const ensureFreeListenPlaying = async (): Promise<boolean> => {
+export const ensureFreeListenReady = async (): Promise<boolean> => {
   try {
-    const player = usePlayerStore(pinia);
-    if (isFreeListenQueueReady()) {
-      if (!player.isPlaying) await player.togglePlay();
-      return true;
-    }
+    if (isFreeListenQueueReady()) return true;
     return await startFreeListenPlayback();
   } catch (error) {
-    logger.warn('FreeListen', 'Ensure playing failed', error);
+    logger.warn('FreeListen', 'Ensure ready failed', error);
     return false;
   }
 };
