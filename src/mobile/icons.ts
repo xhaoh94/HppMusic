@@ -43,6 +43,7 @@ import * as tablerCircleX from '@iconify/icons-tabler/circle-x';
 import * as tablerClock from '@iconify/icons-tabler/clock';
 import * as tablerCloudOff from '@iconify/icons-tabler/cloud-off';
 import * as tablerDeviceMobile from '@iconify/icons-tabler/device-mobile';
+import * as tablerDiamond from '@iconify/icons-tabler/diamond';
 import * as tablerDisc from '@iconify/icons-tabler/disc';
 import * as tablerDots from '@iconify/icons-tabler/dots';
 import * as tablerHeadphones from '@iconify/icons-tabler/headphones';
@@ -125,6 +126,7 @@ export const circleX = icon(tablerCircleX, 'circle-x');
 export const clock = icon(tablerClock, 'clock');
 export const cloudOff = icon(tablerCloudOff, 'cloud-off');
 export const deviceMobile = icon(tablerDeviceMobile, 'device-mobile');
+export const diamond = icon(tablerDiamond, 'diamond');
 export const disc = icon(tablerDisc, 'disc');
 export const dots = icon(tablerDots, 'dots');
 export const headphones = icon(tablerHeadphones, 'headphones');
@@ -217,6 +219,7 @@ export const iconPlaylistAdd = playlistAdd;
 export const iconVideo = video;
 export const iconBarrage = message2;
 export const iconShirt = shirt;
+export const iconDiamond = diamond;
 
 /* ── 自绘图标 ──
  *
