@@ -67,6 +67,7 @@ import {
   iconNext,
   iconPause,
   iconPlay,
+  iconPlaylistAdd,
   iconPrevious,
   iconQueue,
   iconRepeat,
@@ -296,13 +297,24 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="player-bar">
-      <!-- ① 功能行（四项，对齐旧项目：音效已收进「更多」） -->
+      <!-- ① 功能行（五项）
+           「添加到歌单」放在「收藏」左边：两个都是“把这首歌收进歌单”的同类动作，
+           从左到右是“先选目标歌单 → 或直接丢进我喜欢”，读起来顺。
+           旧项目这一行是四项（音效收在「更多」里），这里多一个添加到 —— 按用户要求。 -->
       <div class="func-row">
         <button type="button" class="func-button" aria-label="音质" @click="qualityOpen = true">
           <Icon :icon="iconAudioWave" width="22" height="22" />
         </button>
         <button type="button" class="func-button" aria-label="评论" @click="commentOpen = true">
           <Icon :icon="iconMessageCircle" width="22" height="22" />
+        </button>
+        <button
+          type="button"
+          class="func-button"
+          aria-label="添加到歌单"
+          @click="addToPlaylistOpen = true"
+        >
+          <Icon :icon="iconPlaylistAdd" width="22" height="22" />
         </button>
         <button
           type="button"
