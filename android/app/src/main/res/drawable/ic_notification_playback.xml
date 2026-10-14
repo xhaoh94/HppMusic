@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  通知栏小图标。
+
+  必须满足 Android 对小图标的要求：**单色 + 透明背景**（系统只取 alpha 通道，
+  有颜色的部分会被涂成白色/主题色）。用 mipmap 里的应用图标当小图标是常见错误 ——
+  在 Android 5+ 上会显示成一块白方块或灰块。
+
+  尺寸按 24dp 画（系统会自己缩放），内容是一个音符。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="#FFFFFFFF">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M12,3v10.55c-0.59,-0.34 -1.27,-0.55 -2,-0.55 -2.21,0 -4,1.79 -4,4s1.79,4 4,4 4,-1.79 4,-4V7h4V3h-6z" />
+</vector>

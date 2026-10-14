@@ -7,6 +7,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.Log;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
@@ -28,6 +29,8 @@ import java.util.function.Function;
 /** Capacitor bridge for the Media3 native player and MediaSession. */
 @CapacitorPlugin(name = "EchoNativePlayer")
 public final class EchoNativePlayerPlugin extends Plugin implements EchoPlaybackService.Listener {
+
+    private static final String TAG = "EchoNativePlayer";
     private static final int NOTIFICATION_PERMISSION_REQUEST = 7011;
     private static final int SERVICE_READY_TIMEOUT_MS = 5_000;
 
@@ -316,12 +319,19 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
     }
 
     private void ensureService(Function<EchoPlaybackService, Void> ready) {
-        if (service != null) {
+        // ⚠️ 必须连着 `!isDestroyed()` 一起判：播放停止后 Media3 会放弃前台状态，
+        // 系统可以随时回收这个服务（onDestroy 里 player 被置 null），
+        // 而这里缓存的引用仍然非空 —— 旧实现就因此拿着已销毁的实例下发 load()，
+        // 在原生侧抛 NPE 直接把进程干掉（切歌/重新播放时必崩）。
+        if (service != null && !service.isDestroyed()) {
             ready.apply(service);
             return;
         }
+        // 缓存已失效：先解绑（removeListener 对已销毁的服务是安全的），再重新拉起
+        if (service != null) detachServiceListener();
+
         EchoPlaybackService existing = EchoPlaybackService.getInstance();
-        if (existing != null) {
+        if (existing != null && !existing.isDestroyed()) {
             attachService(existing);
             ready.apply(existing);
             return;
@@ -338,13 +348,14 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
         } catch (RuntimeException error) {
             // 后台禁止创建普通服务时，后续调用返回 service-unavailable。
             // 正常后台播放使用已经存活的 MediaSessionService，不重新创建服务。
+            Log.w(TAG, "startService 被系统拒绝，后续操作将返回 service-unavailable", error);
         }
         waitForService(ready, System.currentTimeMillis());
     }
 
     private void waitForService(Function<EchoPlaybackService, Void> ready, long startedAt) {
         EchoPlaybackService current = EchoPlaybackService.getInstance();
-        if (current != null) {
+        if (current != null && !current.isDestroyed()) {
             attachService(current);
             ready.apply(current);
             return;

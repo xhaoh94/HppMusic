@@ -205,6 +205,28 @@ const isPx = (value) => /^-?\d+(\.\d+)?px$/.test(String(value || '').trim());
 
 console.log(`[verify-layout] 目标：${url}\n`);
 
+/**
+ * 先确认服务真的可访问再开测。
+ *
+ * 之前偶发过 "24/25、1 项失败"：preview 服务刚起来时 Chrome 先到，
+ * 第一个视口在轮询窗口内没渲染出页面 → 被当成"页面已渲染"失败。
+ * 服务可达性应该先探清楚，而不是把它和页面渲染混在一起轮询。
+ */
+for (let attempt = 0; attempt < 30; attempt += 1) {
+  try {
+    const response = await fetch(url.split('#')[0]);
+    if (response.ok) break;
+  } catch {
+    /* 服务还没起来 */
+  }
+  if (attempt === 29) {
+    console.error(`[verify-layout] 目标不可访问：${url.split('#')[0]}（先跑 npx vite preview）`);
+    cleanup();
+    process.exit(1);
+  }
+  await sleep(500);
+}
+
 for (const viewport of VIEWPORTS) {
   console.log(`  ${viewport.label}`);
 
@@ -218,15 +240,17 @@ for (const viewport of VIEWPORTS) {
   await send('Page.navigate', { url });
   // 等待 Vue 挂载 + 路由守卫跑完（守卫会 await pinia 水合）。
   // 轮询而不是固定 sleep：CI 上固定值要么不够要么白等。
+  // 上限给到 20 秒（50 × 400ms）—— 冷启动的 Chrome + 首次拉到 1.4MB 的
+  // KuGou API 产物偶尔会比 12 秒慢。
   let probe = null;
-  for (let attempt = 0; attempt < 30; attempt += 1) {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
     await sleep(400);
     probe = JSON.parse(await evaluate(PROBE));
     if (probe.appHeight && probe.visibleText) break;
   }
 
   if (!probe?.appHeight) {
-    assert('页面已渲染', false, '8 秒内 #app 仍没有高度（白屏？）');
+    assert('页面已渲染', false, '20 秒内 #app 仍没有高度（白屏？）');
     continue;
   }
 

@@ -54,5 +54,12 @@ cd "$ROOT/android"
 
 echo
 echo "[android] 产物："
-find "$ROOT/android/app/build/outputs/apk" -name "*.apk" -newermt "-10 minutes" -print 2>/dev/null ||
-  find "$ROOT/android/app/build/outputs/apk" -name "*.apk" -print
+# 不用 `find -newermt`：Git Bash 下 PATH 里的 find 可能是 Windows 自带的
+# （它不支持 -name/-newermt，会把参数当路径去执行，报出莫名其妙的语法错误）。
+APK_DIR="$ROOT/android/app/build/outputs/apk"
+for variant_dir in "$APK_DIR"/*/; do
+  [[ -d "$variant_dir" ]] || continue
+  for apk in "$variant_dir"*.apk; do
+    [[ -f "$apk" ]] && ls -lh --time-style=+%m-%d\ %H:%M "$apk" | awk '{print "  " $6 " " $7 "  " $5 "  " $8}'
+  done
+done
