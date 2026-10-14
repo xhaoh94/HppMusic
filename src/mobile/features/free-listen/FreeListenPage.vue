@@ -32,7 +32,8 @@
  * 这个频道一次给几十首，滑动找歌很低效，所以页内放一个过滤框
  * （只是**本地过滤**，不触发搜索接口 —— 它是"在结果里找"，不是"搜全网"）。
  */
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
 import SongRow from '@mobile/components/SongRow.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
 import { Icon } from '@iconify/vue';
@@ -52,7 +53,9 @@ import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
 defineOptions({ name: 'FreeListenPage' });
 
 const user = useUserStore();
-const { playSong, playList } = usePlaybackActions();
+const router = useRouter();
+const { playSong, playList, activeQueue, remainingInQueue, appendToActiveQueue } =
+  usePlaybackActions();
 
 const QUEUE_META = { queueId: 'queue:free-listen', title: '随便听', subtitle: '' };
 
@@ -113,8 +116,64 @@ const clearSearch = () => {
 
 const onSelect = async (song: Song) => {
   const context = displayedSongs.value;
-  await playSong(song, context, QUEUE_META);
+  const started = await playSong(song, context, QUEUE_META);
+  // 点歌直接进播放页。只在真的播起来了才跳 —— 否则用户看到的是一个空壳播放页
+  if (started) void router.push({ name: 'player' });
 };
+
+/**
+ * 当前活动队列是不是本页开的那个。
+ *
+ * 预取必须检查：用户可能从这里播着播着又去别的页开了一个队列，
+ * 那时 `remainingInQueue` 反映的是**新队列**的剩余量，跟着它追加会把
+ * 随便听的歌塞进别人的队列里。
+ */
+const ownsActiveQueue = computed(
+  () => String(activeQueue.value?.id ?? '') === QUEUE_META.queueId,
+);
+
+/** 剩这么几首时就去拉下一批（不是 0：等播完再拉会静音一下） */
+const PREFETCH_AT = 3;
+/** 预取中：防止同一批被拉两次 */
+let prefetching = false;
+
+/**
+ * 再拉一批**追加**在后面（增量）。
+ *
+ * 与 `refresh`（换一批）的区别：那个是**替换**整个列表，这个只追加。
+ *
+ * 两处都要动，少一个都不行：
+ * · 页面列表 —— 用户看到的变多；
+ * · 播放队列 —— 只改列表的话队列还是 30 首，**播完照样会停**。
+ *   `appendToActiveQueue` 走内核的 `appendToPlaybackQueue`，它自己去重。
+ *
+ * 去重靠 `collectSongs`（内部查 `seenKeys`），与首批同一套。
+ */
+const appendMore = async () => {
+  if (prefetching || loading.value) return;
+  prefetching = true;
+  const isSessionCurrent = captureUserSession(user);
+  try {
+    const payload = await getFreeListenSongs();
+    if (!isSessionCurrent()) return;
+    const fresh = collectSongs(payload);
+    if (!fresh.length) return;
+    songs.value = [...songs.value, ...fresh];
+    appendToActiveQueue(fresh);
+    logger.info('FreeListen', 'Prefetched more:', fresh.length);
+  } catch (error) {
+    // 静默失败：这是后台预取，不该弹提示打断听歌；下次切歌时还会再试
+    logger.warn('FreeListen', 'Prefetch more failed', error);
+  } finally {
+    prefetching = false;
+  }
+};
+
+watch(remainingInQueue, (left) => {
+  if (!ownsActiveQueue.value) return;
+  // left 为 0 表示已经是最后一首（或已播完），也拉一把兜底
+  if (left <= PREFETCH_AT) void appendMore();
+});
 
 const playAll = async () => {
   const context = displayedSongs.value;

@@ -247,6 +247,33 @@ export const usePlaybackActions = () => {
     return true;
   };
 
+  /**
+   * 当前队列里、当前曲目**之后**还剩几首。
+   *
+   * 用于「快播完时就预取下一批」—— 等真正播完最后一首再去拉，接口往返要 1~2 秒，
+   * 中间会有明显的一段静音。
+   */
+  const remainingInQueue = computed(() =>
+    playlist.getQueueRemainingSongCount(
+      String(playlist.activeQueue?.id ?? ''),
+      player.currentTrackId,
+    ),
+  );
+
+  /**
+   * 往当前队列**末尾追加**（内核会去重）。
+   *
+   * 与 `playSong` / `playList` 的区别：那两个是**替换**整个队列（`replaceQueueAndPlay`），
+   * 这个只追加、不动正在播的那首。
+   *
+   * 返回实际追加的条数（全被去重掉时是 0）。
+   */
+  const appendToActiveQueue = (songs: Song[]): number => {
+    const queueId = String(playlist.activeQueue?.id ?? '');
+    if (!queueId || !songs.length) return 0;
+    return playlist.appendToPlaybackQueue(songs, { queueId });
+  };
+
   return {
     playSong,
     playList,
@@ -261,6 +288,8 @@ export const usePlaybackActions = () => {
     manualQueueMeta,
     isCurrentFavorite,
     toggleFavorite,
+    remainingInQueue,
+    appendToActiveQueue,
   };
 };
 
