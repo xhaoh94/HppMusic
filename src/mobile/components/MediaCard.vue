@@ -64,6 +64,17 @@ watch(
   flex-direction: column;
   gap: var(--sp-2);
   width: 100%;
+  /*
+   * ⚠️ 必须显式归零，不能靠默认的 `auto`。
+   *
+   * grid 的 `1fr` 展开是 `minmax(auto, 1fr)`，而 `auto` 作为**最小值**等于内容的最小宽度；
+   * 图片的 `min-width: auto` 又等于它自己的**固有宽度**。于是当某张封面图比列宽还宽时，
+   * 列会被图片撑开 —— 实测排行榜页面（封面是 544px 的大图）grid 列变成
+   * `544px 88px`，总宽 632px 超出容器 408px，整页看起来是一列全宽卡片。
+   *
+   * 宽度该由容器决定（`width: 100%` + `aspect-ratio`），不应该被图片的原始尺寸绑架。
+   */
+  min-width: 0;
   text-align: left;
   transition: transform var(--duration-fast) var(--ease-standard);
 }
