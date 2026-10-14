@@ -82,6 +82,7 @@ import * as tablerUser from '@iconify/icons-tabler/user';
 import * as tablerVideo from '@iconify/icons-tabler/video';
 import * as tablerVolume from '@iconify/icons-tabler/volume';
 import * as tablerWifiOff from '@iconify/icons-tabler/wifi-off';
+import * as tablerWorld from '@iconify/icons-tabler/world';
 import * as tablerX from '@iconify/icons-tabler/x';
 
 /**
@@ -164,6 +165,7 @@ export const trash = icon(tablerTrash, 'trash');
 export const user = icon(tablerUser, 'user');
 export const video = icon(tablerVideo, 'video');
 export const volume = icon(tablerVolume, 'volume');
+export const world = icon(tablerWorld, 'world');
 export const wifiOff = icon(tablerWifiOff, 'wifi-off');
 export const x = icon(tablerX, 'x');
 
@@ -220,6 +222,7 @@ export const iconVideo = video;
 export const iconBarrage = message2;
 export const iconShirt = shirt;
 export const iconDiamond = diamond;
+export const iconWorld = world;
 
 /* ── 自绘图标 ──
  *

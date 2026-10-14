@@ -26,7 +26,10 @@ import { Icon } from '@iconify/vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
 import Sheet from '@mobile/components/Sheet.vue';
 import MediaCard from '@mobile/components/MediaCard.vue';
-import { iconAdd, iconRefresh, iconUser } from '@mobile/icons';
+import { iconAdd, iconLock, iconRefresh, iconUser, iconWorld } from '@mobile/icons';
+import { toListenTogetherAudioRefs } from '@/utils/listenTogether';
+import type { ListenTogetherMusicProgressInfo } from '@/models/listenTogether';
+import type { Song } from '@/models/song';
 import { useListenTogetherStore } from '@/stores/listenTogether';
 import { usePlayerStore } from '@/stores/player';
 import { useToastStore } from '@/stores/toast';
@@ -38,6 +41,14 @@ const player = usePlayerStore();
 const toast = useToastStore();
 
 const previewOpen = ref(false);
+
+/* ── 创建房间表单 ── */
+const createOpen = ref(false);
+const createName = ref('');
+/** 1 = 公开，2 = 私密（内核 `ListenTogetherRoomPrivacy`） */
+const createPrivacy = ref<1 | 2>(2);
+/** 公开房间的代价：账号需具备公开创房权限，否则会被实名验证拦住 */
+const createQueueCount = computed(() => (player.currentPlaylist ?? []).length);
 const draft = ref('');
 const busy = ref(false);
 
@@ -104,41 +115,90 @@ const leave = async () => {
 };
 
 /**
+ * 房主当前播放位置。
+ *
+ * 服务端建房间时**必需**这个字段** —— 缺了直接返回 `20003`
+ * （内核会把它翻成"房间频道或歌曲配置不完整"，看不出到底缺什么）。
+ * 字段名与取值照搬参考产品的 `musicRoomProgressInfo`：`pause` 用 1/2 而不是布尔，
+ * `play_mode` 是字符串 `'1'|'2'|'3'`（列表/单曲/随机）。
+ */
+const currentProgressInfo = (): ListenTogetherMusicProgressInfo | undefined => {
+  const current = player.currentTrackSnapshot;
+  if (!current?.hash) return undefined;
+  const albumAudioId = String(current.mixSongId ?? current.albumAudioId ?? '');
+  if (!albumAudioId) return undefined;
+  return {
+    hash: current.hash,
+    album_audio_id: albumAudioId,
+    progress: Math.max(0, Math.floor(player.currentTime || 0)),
+    // pause 用 1/2 而不是布尔；play_mode 是字符串 '1'|'2'|'3'（列表/单曲/随机）
+    pause: player.isPlaying ? 1 : 2,
+    play_mode: player.playMode === 'single' ? '2' : player.playMode === 'random' ? '3' : '1',
+  };
+};
+
+/**
  * 用当前播放队列开一间房。
  *
- * 单独做一个"填房间名 + 初始化歌曲"的表单在手机上是三层交互；
- * 而用户想开房的场景几乎都是"我正在听的这队歌，叫朋友一起听"，
- * 所以直接用当前队列，不需要他再挑一次歌。
+ * ## 房间权限必须让用户选，而且默认「私密」
+ *
+ * 上游对**公开房间**有单独的权限要求（参考产品的表单里就写着「可在广场发现；
+ * 账号需具备公开创房权限」）。实测（同一账号、同一台机器）：
+ *
+ * · `privacy: 1`（公开） → 服务端返回验证类型 34（实名认证），建不了
+ * · 私密房间          → **一次成功**，没有任何验证
+ *
+ * 之前这里把 `privacy` 硬编码成 1（照搬上游的默认值）且没有选的入口，
+ * 于是必然撞上实名要求。所以：默认改成**私密**（能直接用），公开作为可选项
+ * 并在选中时把代价说清楚 —— 这是有意识与上游不一致的地方。
+ *
+ * ## 为什么现在改成弹表单
+ *
+ * 原来是一键创建（自动命名、沿用当前队列），理由是手机上少一层交互。
+ * 但权限既然必须选，就绕不开一个表单；那就顺手把房间名也放进去（预填好），
+ * 用户直接按「创建」即可，不会比以前多几步。
  */
-const createRoom = async () => {
+const openCreate = () => {
   const queue = player.currentPlaylist ?? [];
   if (!queue.length) {
     toast.warning('先在首页放首歌，再用当前队列开房间');
     return;
   }
+  createName.value = `${player.currentTrackSnapshot?.title ?? '一起听'} 的房间`;
+  // 默认私密 —— 公开需要账号具备公开创房权限，选了可能直接被验证拦住
+  createPrivacy.value = 2;
+  createOpen.value = true;
+};
+
+const submitCreate = async () => {
+  const queue = player.currentPlaylist ?? [];
+  if (!queue.length) {
+    toast.warning('先在首页放首歌，再用当前队列开房间');
+    return;
+  }
+  const name = createName.value.trim() || '一起听 的房间';
   if (busy.value) return;
-  const name = `${player.currentTrackSnapshot?.title ?? '一起听'} 的房间`;
   busy.value = true;
   try {
     /**
-     * 参数必须完整：`ListenTogetherCreateBase` 里 `notice` 与 `audios` 都是必需的，
-     * 少了 `notice` 会在 store 内部 `input.notice.trim()` 直接抛
-     * `Cannot read properties of undefined`（踩过）。
-     * `audios` 的每一项要 `{ hash, mixSongId }`，不是 `{ hash, name }`。
+     * `audios` 走内核的 `toListenTogetherAudioRefs`，不自己 map：
+     * 它会**先滤掉没有 hash 的歌**、并把 `mixSongId` 回落到 `albumAudioId`。
+     * 自己写 `queue.map(song => ({ hash, mixSongId }))` 会把 hash 为空的歌
+     * 也发上去，服务端同样报 20003（踩过）。
      */
     await room.createRoom(
       {
         name,
         notice: '',
         roomType: 0,
-        privacy: 1,
-        audios: queue.map((song) => ({
-          hash: String(song.hash ?? ''),
-          mixSongId: String(song.mixSongId ?? ''),
-        })),
+        privacy: createPrivacy.value,
+        capacity: 5,
+        progressInfo: currentProgressInfo(),
+        audios: toListenTogetherAudioRefs(queue as Song[], 50),
       },
       queue,
     );
+    createOpen.value = false;
     toast.success('房间已创建');
   } catch (error) {
     logger.warn('ListenTogether', 'Create room failed', error);
@@ -295,13 +355,13 @@ const goBackToList = () => {
 
     <!-- ── 房间列表 ── -->
     <div v-else class="page-body">
-      <!-- 悬浮创建钮：不占布局高度，也不会像顶部工具栏那样与子页签栏挤在一起 -->
+      <!-- 悬浮创建钮：不占布局高度，也不会像顶部子页签栏那样挤在一起 -->
       <button
         type="button"
         class="fab"
         :disabled="busy"
         aria-label="用当前队列开房间"
-        @click="createRoom"
+        @click="openCreate"
       >
         <Icon :icon="iconAdd" width="24" height="24" />
       </button>
@@ -365,6 +425,48 @@ const goBackToList = () => {
       </button>
     </template>
   </Sheet>
+
+  <!-- 创建众乐房：房间权限必须选，默认私密（公开需要账号具备公开创房权限） -->
+  <Sheet v-model="createOpen" title="创建众乐房">
+    <p class="create-hint">创建时会沿用当前播放队列（{{ createQueueCount }} 首）。</p>
+
+    <p class="preview-label">房间名称</p>
+    <input v-model="createName" class="create-input" type="text" placeholder="房间名称" />
+
+    <p class="preview-label">房间权限</p>
+    <div class="privacy-options">
+      <button
+        type="button"
+        class="privacy-option"
+        :class="{ 'is-selected': createPrivacy === 2 }"
+        @click="createPrivacy = 2"
+      >
+        <Icon :icon="iconLock" width="18" height="18" />
+        <strong>私密房间</strong>
+        <small>仅限受邀成员，最多 5 人</small>
+      </button>
+      <button
+        type="button"
+        class="privacy-option"
+        :class="{ 'is-selected': createPrivacy === 1 }"
+        @click="createPrivacy = 1"
+      >
+        <Icon :icon="iconWorld" width="18" height="18" />
+        <strong>公开房间</strong>
+        <small>可在广场发现</small>
+      </button>
+    </div>
+    <p v-if="createPrivacy === 1" class="create-warning">
+      公开房间需要账号具备公开创房权限。实测这个权限不足时，服务端会要求实名认证 ——
+      若被拦住，改用「私密房间」即可直接创建。
+    </p>
+
+    <template #footer>
+      <button type="button" class="join-button" :disabled="busy" @click="submitCreate">
+        {{ busy ? '创建中…' : '创建众乐房并进入' }}
+      </button>
+    </template>
+  </Sheet>
 </template>
 
 <style scoped>
@@ -421,6 +523,74 @@ const goBackToList = () => {
 
 .fab:active:not(:disabled) {
   transform: scale(0.94);
+}
+
+/* ── 创建房间表单 ── */
+.create-hint {
+  margin: 0 0 var(--sp-4);
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+}
+
+.create-input {
+  width: 100%;
+  min-height: 44px;
+  padding: 0 var(--sp-3);
+  border: 1px solid var(--divider-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+  font-size: var(--font-md);
+  color: var(--text-primary);
+}
+
+.create-input::placeholder {
+  color: var(--text-tertiary);
+}
+
+.privacy-options {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--sp-3);
+}
+
+.privacy-option {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: var(--sp-3);
+  border: 1px solid var(--divider-strong);
+  border-radius: var(--radius-md);
+  text-align: left;
+  color: var(--text-secondary);
+}
+
+.privacy-option.is-selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.privacy-option strong {
+  font-size: var(--font-md);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.privacy-option.is-selected strong {
+  color: var(--accent);
+}
+
+.privacy-option small {
+  font-size: var(--font-xs);
+  line-height: var(--leading-tight);
+  color: var(--text-tertiary);
+}
+
+.create-warning {
+  margin: var(--sp-3) 0 0;
+  font-size: var(--font-xs);
+  line-height: var(--leading-normal);
+  color: var(--warning);
 }
 
 .fab:disabled {
