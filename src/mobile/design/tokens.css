@@ -93,34 +93,40 @@
 
 /* ── 深色（默认） ──
  *
- * 底色对齐上游的中性深色主题（`src/shared/themePalette.ts` 的
+ * 色值取自上游的中性深色主题（`src/shared/themePalette.ts` 的
  * `neutralThemePalette(true)`）：shell `#171718` / main `#29292b` / card `#343436`。
  *
- * 映射关系：base=shell、raised=elevated/main、sheet=elevated、overlay/input=card。
- * 之前用的是近纯黑 `#0b0b0f`，对比度拉得太开 —— 整个界面像浮在黑洞上，卡片分层
- * 全靠边框硬拉，与参考产品的观感差得远。
+ * 映射关系（**移动端的页面底用 main，不是 shell**）：
+ * · 移动端整屏都是内容区，没有桌面那种侧边栏 + 内容区的区分，所以把 main 当页面底
+ * · 底栏反而是**下沉**的：实测参考产品 App 底栏是 `#111115`，比页面暗
+ *
+ * 这条是实测确认的（装上游 App 截屏取像素）：页面 `#29292b`、卡片 `#343436`、
+ * 底栏 `#111115`。之前我先用了 shell `#171718`，整个界面一片黑，卡片分层全靠边框硬拉。
  */
 :root,
 [data-theme='dark'] {
   color-scheme: dark;
 
-  --bg-base: #171718;
-  --bg-raised: #29292b;
-  --bg-overlay: #343436;
-  --bg-sheet: #29292b;
-  --bg-input: #343436;
+  --bg-base: #29292b;
+  --bg-raised: #343436;
+  --bg-overlay: #3d3d40;
+  --bg-sheet: #343436;
+  --bg-input: #3d3d40;
+  /* 底部导航栏：比页面暗一档，让内容区“浮”起来（参考产品同结构） */
+  --bg-bar: #111115;
 
   --text-primary: #ffffff;
   --text-secondary: #bcbcbc;
   --text-tertiary: #8a8a8c;
   --text-inverse: #171718;
 
-  --divider: rgba(255, 255, 255, 0.08);
-  --divider-strong: rgba(255, 255, 255, 0.16);
+  /* 底色变亮后，同样的白色百分比会显得更淡，所以比原来略提高一点 */
+  --divider: rgba(255, 255, 255, 0.1);
+  --divider-strong: rgba(255, 255, 255, 0.18);
 
-  --fill-subtle: rgba(255, 255, 255, 0.04);
-  --fill-muted: rgba(255, 255, 255, 0.07);
-  --fill-strong: rgba(255, 255, 255, 0.12);
+  --fill-subtle: rgba(255, 255, 255, 0.06);
+  --fill-muted: rgba(255, 255, 255, 0.09);
+  --fill-strong: rgba(255, 255, 255, 0.14);
 
   --accent: #ff4e3a;
   --accent-pressed: #e33f2d;
@@ -134,8 +140,8 @@
   --skeleton-base: rgba(255, 255, 255, 0.06);
   --skeleton-highlight: rgba(255, 255, 255, 0.12);
 
-  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.5);
-  --shadow-dialog: 0 12px 48px rgba(0, 0, 0, 0.6);
+  --shadow-sheet: 0 -8px 32px rgba(0, 0, 0, 0.55);
+  --shadow-dialog: 0 12px 48px rgba(0, 0, 0, 0.65);
 }
 
 /* ── 浅色 ── */
@@ -147,6 +153,7 @@
   --bg-overlay: #ffffff;
   --bg-sheet: #ffffff;
   --bg-input: #f0f0f4;
+  --bg-bar: #ffffff;
 
   --text-primary: #17171d;
   --text-secondary: #5f5f6b;

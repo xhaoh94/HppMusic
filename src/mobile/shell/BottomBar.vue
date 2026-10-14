@@ -91,7 +91,7 @@ const openNowPlaying = () => {
   align-items: stretch;
   height: calc(var(--bottom-bar-height) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
-  background: var(--bg-raised);
+  background: var(--bg-bar);
   border-top: 1px solid var(--divider);
 }
 

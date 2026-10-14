@@ -45,7 +45,7 @@ const apply = (theme: ResolvedTheme) => {
   // 状态栏/导航栏配色跟随（Capacitor SystemBars 读的是 windowBackground，
   // 这里同步 theme-color 让浏览器 UI 与页面一致，避免顶部出现一条异色）
   const meta = document.querySelector('meta[name="theme-color"]');
-  const color = theme === 'dark' ? '#171718' : '#f7f7f9';
+  const color = theme === 'dark' ? '#29292b' : '#f7f7f9';
   if (meta) meta.setAttribute('content', color);
   else {
     const created = document.createElement('meta');
