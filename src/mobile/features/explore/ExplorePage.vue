@@ -167,8 +167,8 @@ onMounted(() => {
 
 <template>
   <div class="explore-page">
-    <!-- 一级分类：6 个，横滑 -->
-    <div class="chips scroll-x" role="tablist" aria-label="歌单分类">
+    <!-- 一级分类：7 个（接口 6 个父分类 + 全部），是**固定数量**，换行全显示 -->
+    <div class="chips is-primary" role="tablist" aria-label="歌单分类">
       <button
         v-for="group in groups"
         :key="group.tagId"
@@ -238,16 +238,42 @@ onMounted(() => {
   padding: var(--sp-2) var(--sp-4);
 }
 
-/* 二级标签往右缩进一点：视觉上归属于上面选中的那个一级分类 */
+/*
+ * 一级分类：7 个固定数量，**换行**全部显示。
+ *
+ * 原来用横滑，但 7 个 chip（每个约 65px）超出窄屏约 90px —— 最后一个被切掉一半，
+ * 看上去像坏了，而“能滑”这件事没有明显提示。数量固定且不多，换行是最直接的解法。
+ */
+.chips.is-primary {
+  flex-wrap: wrap;
+  row-gap: var(--sp-2);
+  /* 一级行间距收窄，为“一行放下 7 个”多腾出一点宽度 */
+  column-gap: var(--sp-2);
+}
+
+/*
+ * 二级标签则保持横滑：「场景」下有 23 个子标签，换行会占掉大半屏高度。
+ * 两级交互不一样是有意的：一级少而固定，二级多而可变。
+ */
 .chips.is-secondary {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
   padding-top: 0;
   padding-left: var(--sp-6);
+}
+
+.chips.is-secondary::-webkit-scrollbar {
+  display: none;
 }
 
 .chip {
   flex: 0 0 auto;
   min-height: 32px;
-  padding: 0 var(--sp-4);
+  /* 横向内边距收窄（原 --sp-4）：一级 7 个 chip 在 440px 宽屏上能刚好排成一行，
+     而不是把「年代」单独挤到第二行。窄屏仍然会自动折行（父级是 flex-wrap）。 */
+  padding: 0 var(--sp-3);
   border-radius: var(--radius-pill);
   font-size: var(--font-sm);
   color: var(--text-secondary);
