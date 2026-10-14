@@ -328,11 +328,24 @@ watch(activeCategoryId, () => void loadRecommended());
   padding: 0 var(--sp-4) var(--sp-5);
 }
 
+/*
+ * 磁贴是一块**独立卡片**（对齐参考产品）：原来只有"彩色图标块 + 底下裸文字"，
+ * 在深色背景上显得散、也没有可点的边界感。包成卡片后整块都是热区，点击意图更清楚。
+ */
 .tile {
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-1);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.tile:active {
+  background: var(--fill-muted);
 }
 
 .tile:active .tile-icon {
@@ -343,19 +356,20 @@ watch(activeCategoryId, () => void loadRecommended());
   opacity: 0.55;
 }
 
+/* 图标块：卡片内缩小一号（56 → 44），留出卡片的呼吸感 */
 .tile-icon {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 56px;
-  height: 56px;
-  border-radius: var(--radius-lg);
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
   color: #fff;
   transition: transform var(--duration-fast) var(--ease-standard);
 }
 
 .tile-icon-text {
-  font-size: var(--font-xl);
+  font-size: var(--font-lg);
   font-weight: var(--weight-bold);
   letter-spacing: -0.02em;
 }
@@ -365,8 +379,9 @@ watch(activeCategoryId, () => void loadRecommended());
   background: linear-gradient(140deg, #34d399, #10b981);
 }
 
+/* 原来是深灰渐变，放进同样深色的卡片后就糊在一起了 —— 整体提亮一档 */
 .tone-dark {
-  background: linear-gradient(140deg, #3f3f46, #27272a);
+  background: linear-gradient(140deg, #52525b, #3f3f46);
 }
 
 .tone-purple {
@@ -377,9 +392,10 @@ watch(activeCategoryId, () => void loadRecommended());
   background: linear-gradient(140deg, #60a5fa, #3b82f6);
 }
 
+/* 文字提亮到主色（原来是 tertiary 级别的灰，在卡片上偏暗） */
 .tile-label {
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
+  font-size: var(--font-md);
+  color: var(--text-primary);
   text-align: center;
 }
 
