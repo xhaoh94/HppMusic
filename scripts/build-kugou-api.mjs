@@ -75,6 +75,16 @@ const REQUIRED_ROUTES = [
    *  那两个内核有调用，已经在包里了。）
    */
   '/comment/music/send',
+  /**
+   * 风控验证链路。
+   *
+   * 这两个路由不是通过 `request.get(...)` 调的，而是内核把请求函数**当回调**传给
+   * 验证挑战（`challenge.request('/get/verify/info', ...)`），
+   * 所以路由扫描器根本扫不到 —— 一旦风控触发，验证信息拿不回来（404），
+   * 整个请求就永远挂在那里（实测：创建一起听房间时 `phase` 卡在 creating 不返回）。
+   */
+  '/get/verify/info',
+  '/sidedt',
 ];
 const DYNAMIC_ROUTE_FILES = [path.join(RENDERER, 'api', 'listenTogether.ts')];
 const UNSUPPORTED_ROUTES = new Map([
@@ -100,12 +110,24 @@ const walk = (dir) => {
 // 1) 渲染层实际调用的路由
 const usedRoutes = new Set();
 const routeRe = /request\.(?:get|post|put|delete)\(\s*['"](\/[^'"]+)['"]/g;
+/**
+ * 第二种调用形式：把请求函数当**回调**传给别的模块，调用点写成
+ * `challenge.request('/get/verify/info', ...)` 之类。
+ *
+ * ⚠️ 只扫第一种形式会漏掉风控验证链路（`/get/verify/info`、`/sidedt`）——
+ * 漏掉的后果不是 404 报错那么简单：验证信息拿不回来时，调用方是在 await
+ * 一个永不 resolve 的 Promise（一起听创建房间就卡在这里）。
+ */
+const callbackRouteRe = /\.request\(\s*['"](\/[^'"]+)['"]/g;
 for (const file of walk(RENDERER)) {
   if (!/\.(ts|vue)$/.test(file)) continue;
   if (file.includes(`${path.sep}generated${path.sep}`)) continue;
   const text = readFileSync(file, 'utf8');
   let match;
+  routeRe.lastIndex = 0;
   while ((match = routeRe.exec(text))) usedRoutes.add(match[1]);
+  callbackRouteRe.lastIndex = 0;
+  while ((match = callbackRouteRe.exec(text))) usedRoutes.add(match[1]);
 }
 
 // 一起听 API 使用 routes 对象 + request.post(endpoint, ...) 动态拼接，

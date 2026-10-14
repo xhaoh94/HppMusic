@@ -56,6 +56,12 @@ export const router = createRouter({
       component: () => import('@mobile/features/free-listen/FreeListenPage.vue'),
       meta: { section: 'main', title: '免费听' },
     },
+    {
+      path: '/main/listen-together',
+      name: 'listen-together',
+      component: () => import('@mobile/features/listen-together/ListenTogetherPage.vue'),
+      meta: { section: 'main', title: '一起听' },
+    },
 
     // ── 全屏页（不带外壳） ──
     {
