@@ -21,10 +21,17 @@
  * · 背景层 —— `drawable/ic_launcher_background.xml` 里的渐变，由 anydpi 的
  *   xml 引用。用 drawable 而不是 color，因为渐变没法塞进一个颜色值。
  *
- * ## 安全区
+ * ## 安全区 —— 这里有个容易踩的坑
  *
- * 自适应图标只显示中心 **72×72**，超出去会被 launcher 的圆形/圆角遮罩切掉。
- * 所以音符的坐标是按"内容不超出 [18, 90]"反推的，不要随手放大。
+ * 自适应图标只显示中心 **72×72**，而且 launcher 会把这 72dp **放大**到图标实际尺寸。
+ * 也就是说内容占 108 画布的 x%，到桌面上看到的是 x/72。
+ *
+ * 实测踩过：音符占了 108 画布的 63%，听起来还好，但用户看到的其实是
+ * **94%** —— 几乎顶满、贴边，反馈"太大了"。正确做法是让内容占**安全区**的
+ * 约 67%（= 108 画布的 45%）。
+ *
+ * 传统方形图标（API 24/25 用）没有这个放大效应，内容直接按画布的 ~70% 算，
+ * 所以两边的 scale 不一样。看起来不一致才是对的。
  */
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -52,6 +59,28 @@ const NOTE = `
       <ellipse cx="70.5" cy="76" rx="13" ry="10" transform="rotate(-22 70.5 76)"/>
     </g>`;
 
+/**
+ * 内容包围盒中心（实测像素得到：宽 68.1、高 64.5，中心在 53.8/54.15）。
+ * 缩放要围绕它做，再把中心搬回画布中心，否则越缩越偏。
+ */
+const NOTE_CENTER = { x: 53.8, y: 54.15 };
+
+/** 把音符缩放到目标占比并对齐画布中心 */
+const noteGroup = (scale) =>
+  `<g transform="translate(54 54) scale(${scale}) translate(${-NOTE_CENTER.x} ${-NOTE_CENTER.y})">${NOTE}</g>`;
+
+/**
+ * 传统方形图标：内容占画布约 70% —— 没有安全区放大，直接用画布比例。
+ * 68.1 × 1.11 ≈ 75.6。
+ */
+const LEGACY_SCALE = 1.11;
+
+/**
+ * 自适应前景：内容占**安全区**(72) 的约 67%，即 108 画布的约 45% → 48 宽。
+ * 72 会显示成 100%，所以这个数才是桌面上真正看到的比例。
+ */
+const FOREGROUND_SCALE = 0.7;
+
 /** 品牌底色：青绿渐变，与图标里的白色音符对比足够强 */
 const BACKDROP_FROM = '#2af5c8';
 const BACKDROP_TO = '#00b894';
@@ -65,29 +94,29 @@ const backdropDefs = (id) => `
     </defs>`;
 
 /** 方形完整图标 */
-const squareIcon = () =>
+const squareIcon = (scale = LEGACY_SCALE) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
   ${backdropDefs('bg')}
   <rect width="108" height="108" fill="url(#bg)"/>
-  ${NOTE}
+  ${noteGroup(scale)}
 </svg>`;
 
 /** 圆形完整图标：底也是圆的，四角透明 */
-const roundIcon = () =>
+const roundIcon = (scale = LEGACY_SCALE) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
   ${backdropDefs('bgr')}
   <defs><clipPath id="c"><circle cx="54" cy="54" r="54"/></clipPath></defs>
   <circle cx="54" cy="54" r="54" fill="url(#bgr)"/>
-  <g clip-path="url(#c)">${NOTE}</g>
+  <g clip-path="url(#c)">${noteGroup(scale)}</g>
 </svg>`;
 
 /**
  * 自适应图标前景：**透明底**，只放音符。
- * 内容已经在中心 72×72 内，所以这里 scale = 1，不要再放大。
+ * 缩放到安全区的 ~67%（见 FOREGROUND_SCALE），不要再放大 —— 那会被裁掉。
  */
-const foregroundIcon = () =>
+const foregroundIcon = (scale = FOREGROUND_SCALE) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
-  ${NOTE}
+  ${noteGroup(scale)}
 </svg>`;
 
 /** density → 传统图标边长（dp 基准 48） */
