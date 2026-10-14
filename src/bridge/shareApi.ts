@@ -11,33 +11,6 @@ interface NativeSharePlugin {
 
 const NativeShare = registerPlugin<NativeSharePlugin>('EchoShare');
 
-/**
- * 主动唤起系统分享面板。
- *
- * 单独导出，而不是让 UI 直接写 `window.electron.share.share(...)`：vendor 的
- * `electron.d.ts` 里 `share` 的类型还停在「复制 / 读剪贴板 / 接收分享」三项，
- * 没跟上实现里已经有的 send（`EchoSharePlugin.share`）。断言收在本文件里，
- * UI 层就不用带 any。失败（含用户取消）一律返回 false，由调用方决定是否兜底。
- */
-export const sendShareText = async (text: string): Promise<boolean> => {
-  try {
-    const { ok } = await NativeShare.share({ text });
-    return Boolean(ok);
-  } catch {
-    return false;
-  }
-};
-
-/** 复制文本到系统剪贴板（分享不可用时的兜底路径） */
-export const copyShareText = async (text: string): Promise<boolean> => {
-  try {
-    const { ok } = await NativeShare.copy({ text });
-    return Boolean(ok);
-  } catch {
-    return false;
-  }
-};
-
 export const createNativeShareApi = () => ({
   copy: async (text: string) => (await NativeShare.copy({ text })).ok,
   readClipboard: async () => (await NativeShare.readClipboard()).text,

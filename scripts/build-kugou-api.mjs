@@ -85,6 +85,15 @@ const REQUIRED_ROUTES = [
    */
   '/get/verify/info',
   '/sidedt',
+  /**
+   * 弹幕。
+   *
+   * 内核是 `request.get(`/${type}/barrage`, ...)` —— 模板字符串拼接，
+   * 字面量正则扫不到；漏掉的话模块表里没有 song_barrage，弹幕请求直接 404
+   * （本地 api bridge 是直接调打入包的模块函数，不走 HTTP 路由，所以 404
+   * 是从 `matchModule` 返回的，不是 server 的问题）。
+   */
+  '/song/barrage',
 ];
 const DYNAMIC_ROUTE_FILES = [path.join(RENDERER, 'api', 'listenTogether.ts')];
 const UNSUPPORTED_ROUTES = new Map([

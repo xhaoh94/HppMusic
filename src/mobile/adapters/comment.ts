@@ -22,6 +22,8 @@
  * 会丢掉 cookie/token 处理），所以**不做点赞** —— 在 UI 上也不渲染可点的心形。
  */
 import type { Comment } from '@/models/comment';
+import { getBarrage } from '@/api/comment';
+import { normalizeBarrageItems, type BarrageItem } from '@/utils/barrage';
 import logger from '@/utils/logger';
 
 const request = <T = unknown>(payload: {
@@ -96,4 +98,19 @@ export const deleteComment = async (cid: string, tid?: string) => {
     params: tid ? { cid: id, tid } : { cid: id },
   });
   assertSuccess(response, '删除评论失败');
+};
+
+/**
+ * 拉取歌曲弹幕。
+ *
+ * 内核 `api/comment.ts` 的 `getBarrage` 返回的是**原始响应**（弹幕挂在 `list` 上），
+ * 解析交给内核的 `normalizeBarrageItems` —— 它负责取 `content` / `user_id`、丢掉空串、
+ * 并按 `BARRAGE_LIMIT`（100）截断。这几步在移动端重写一遍没有意义，而且会和桌面端
+ * 的解析规则漂移。
+ *
+ * `hash` 必须是 32 位歌曲 hash（`Song.hash`），**不是** `mixSongId`。
+ */
+export const fetchSongBarrage = async (hash: string): Promise<BarrageItem[]> => {
+  const response = (await getBarrage('song', hash)) as { list?: unknown };
+  return normalizeBarrageItems(response?.list);
 };

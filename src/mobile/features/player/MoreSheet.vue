@@ -21,16 +21,12 @@ import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import Sheet from '@mobile/components/Sheet.vue';
 import { usePlayerStore } from '@/stores/player';
+import { useSettingStore } from '@/stores/setting';
 import { useToastStore } from '@/stores/toast';
-import { createSongShareTarget } from '@/utils/share';
-import { buildShareText } from '@shared/share';
-import { copyShareText, sendShareText } from '@bridge/shareApi';
-import logger from '@/utils/logger';
-import type { Song } from '@/models/song';
 import {
+  iconBarrage,
   iconMoon,
   iconPlaylistAdd,
-  iconShare,
   iconShirt,
   iconSlidersHorizontal,
   iconSpeed,
@@ -53,15 +49,43 @@ const emit = defineEmits<{
 }>();
 
 const player = usePlayerStore();
+const setting = useSettingStore();
 const toast = useToastStore();
 const router = useRouter();
 
 const close = () => emit('update:modelValue', false);
 
 /** 当前展开的行（同时只能展开一行，避免面板被撑得过长） */
-const expanded = ref<'timer' | 'speed' | 'skin' | null>(null);
-const toggleExpand = (key: 'timer' | 'speed' | 'skin') => {
+const expanded = ref<'timer' | 'speed' | 'skin' | 'barrage' | null>(null);
+const toggleExpand = (key: 'timer' | 'speed' | 'skin' | 'barrage') => {
   expanded.value = expanded.value === key ? null : key;
+};
+
+/* ── 弹幕 ── */
+/**
+ * 开关直接写内核的 `lyricBarrageEnabled`（桌面端同一个键），弹幕层监听它。
+ * 外观设置写 `lyricBarrageConfig` —— 它本来就是给“歌词页弹幕”用的那一份，
+ * 移动端全屏播放页就是桌面端说的歌词页，语义对得上，不另开一份配置。
+ */
+const barrageEnabled = computed({
+  get: () => Boolean(setting.lyricBarrageEnabled),
+  set: (value: boolean) => {
+    setting.lyricBarrageEnabled = value;
+  },
+});
+
+const barrageConfig = computed(() => setting.lyricBarrageConfig);
+const BARRAGE_FONT_SIZES = [14, 17, 20];
+const BARRAGE_SPEEDS = [0.5, 1, 1.5, 2];
+const BARRAGE_OPACITY = [50, 75, 100];
+const BARRAGE_DENSITY: { value: number; label: string }[] = [
+  { value: 1, label: '稀疏' },
+  { value: 2, label: '正常' },
+  { value: 3, label: '密集' },
+];
+
+const setBarrageConfig = (patch: Partial<typeof barrageConfig.value>) => {
+  setting.lyricBarrageConfig = { ...barrageConfig.value, ...patch };
 };
 
 /* ── 定时暂停 ── */
@@ -123,47 +147,6 @@ const openMv = () => {
   }
   close();
   void router.push({ name: 'mv', params: { id: albumAudioId.value } });
-};
-
-/* ── 分享 ── */
-/**
- * 分享当前曲目。
- *
- * 优先走**原生分享面板**（`EchoShare.share`，Android 的 chooser），它比"复制链接"
- * 更符合手机上的分享预期；原生不可用或用户取消时回落到复制链接 —— 旧项目只有复制
- * 这一条路，移动端有原生能力就没必要退化。
- *
- * 文案用内核的 `buildShareText`（含曲名与 web 链接），但 `sharer` 覆盖成 HppMusic：
- * 内核对未登录用户的默认值写的是桌面品牌名。
- */
-const sharing = ref(false);
-const shareCurrent = async () => {
-  const song = player.currentTrackSnapshot as Song | null;
-  if (!song) {
-    toast.warning('还没有正在播放的歌曲');
-    return;
-  }
-  const target = createSongShareTarget(song);
-  if (!target) {
-    toast.warning('这首歌缺少分享标识，无法生成链接');
-    return;
-  }
-  const text = buildShareText({ ...target, sharer: 'HppMusic' });
-  sharing.value = true;
-  try {
-    if (await sendShareText(text)) {
-      close();
-      return;
-    }
-    // 原生面板没起来（例如系统里没有可接收的应用）→ 复制兜底，用户至少拿到链接
-    if (await copyShareText(text)) toast.success('分享链接已复制');
-    else toast.danger('分享失败，请稍后重试');
-  } catch (error) {
-    logger.warn('MoreSheet', 'Share failed', error);
-    toast.danger('分享失败，请稍后重试');
-  } finally {
-    sharing.value = false;
-  }
 };
 </script>
 
@@ -242,6 +225,79 @@ const shareCurrent = async () => {
         <span class="row-chevron" aria-hidden="true">›</span>
       </button>
 
+      <!-- 弹幕：开关直写 setter，点行尾的主体区域展开外观设置 -->
+      <div class="row row-with-switch">
+        <button type="button" class="row-main" @click="toggleExpand('barrage')">
+          <Icon :icon="iconBarrage" width="20" height="20" class="row-icon" />
+          <span class="row-label">弹幕</span>
+          <span class="row-value">{{ barrageEnabled ? '已开启' : '已关闭' }}</span>
+          <span class="row-chevron" :class="{ 'is-open': expanded === 'barrage' }" aria-hidden="true">›</span>
+        </button>
+        <button
+          type="button"
+          class="switch"
+          :class="{ 'is-on': barrageEnabled }"
+          role="switch"
+          :aria-checked="barrageEnabled"
+          aria-label="弹幕开关"
+          @click="barrageEnabled = !barrageEnabled"
+        ><span class="switch-knob" /></button>
+      </div>
+      <div v-if="expanded === 'barrage'" class="expander">
+        <p class="expander-title">字号</p>
+        <div class="chips">
+          <button
+            v-for="size in BARRAGE_FONT_SIZES"
+            :key="size"
+            type="button"
+            class="chip"
+            :class="{ 'is-active': Number(barrageConfig.fontSize) === size }"
+            @click="setBarrageConfig({ fontSize: size })"
+          >
+            {{ size }}
+          </button>
+        </div>
+        <p class="expander-title">速度</p>
+        <div class="chips">
+          <button
+            v-for="speed in BARRAGE_SPEEDS"
+            :key="speed"
+            type="button"
+            class="chip"
+            :class="{ 'is-active': Number(barrageConfig.speed) === speed }"
+            @click="setBarrageConfig({ speed })"
+          >
+            {{ speed }}×
+          </button>
+        </div>
+        <p class="expander-title">不透明度</p>
+        <div class="chips">
+          <button
+            v-for="value in BARRAGE_OPACITY"
+            :key="value"
+            type="button"
+            class="chip"
+            :class="{ 'is-active': Number(barrageConfig.opacity) === value }"
+            @click="setBarrageConfig({ opacity: value })"
+          >
+            {{ value }}%
+          </button>
+        </div>
+        <p class="expander-title">密度</p>
+        <div class="chips">
+          <button
+            v-for="option in BARRAGE_DENSITY"
+            :key="option.value"
+            type="button"
+            class="chip"
+            :class="{ 'is-active': Number(barrageConfig.density) === option.value }"
+            @click="setBarrageConfig({ density: option.value })"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </div>
+
       <!-- 换肤 -->
       <button type="button" class="row" @click="toggleExpand('skin')">
         <Icon :icon="iconShirt" width="20" height="20" class="row-icon" />
@@ -263,13 +319,6 @@ const shareCurrent = async () => {
           </button>
         </div>
       </div>
-
-      <!-- 分享 -->
-      <button type="button" class="row" :disabled="sharing" @click="shareCurrent">
-        <Icon :icon="iconShare" width="20" height="20" class="row-icon" />
-        <span class="row-label">分享</span>
-        <span class="row-chevron" aria-hidden="true">›</span>
-      </button>
     </div>
   </Sheet>
 </template>
@@ -370,5 +419,67 @@ const shareCurrent = async () => {
   font-size: var(--font-sm);
   color: var(--danger);
   background: var(--fill-subtle);
+}
+
+/* ── 带开关的行：主体区可点开设置，右侧开关单独命中 ── */
+.row-with-switch {
+  display: flex;
+  align-items: center;
+  padding-right: var(--sp-2);
+}
+
+.row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  min-height: 52px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.row-main:active {
+  background: var(--fill-subtle);
+}
+
+.switch {
+  flex: 0 0 auto;
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-strong);
+  transition: background var(--duration-fast) var(--ease-standard);
+}
+
+.switch.is-on {
+  background: var(--accent);
+}
+
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.switch.is-on .switch-knob {
+  transform: translateX(18px);
+}
+
+.expander-title {
+  margin: var(--sp-3) 0 var(--sp-2);
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.expander-title:first-child {
+  margin-top: 0;
 }
 </style>

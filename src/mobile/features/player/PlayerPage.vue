@@ -44,6 +44,7 @@ import EffectSheet from './EffectSheet.vue';
 import MoreSheet, { type PlayerSkin } from './MoreSheet.vue';
 import AddToPlaylistSheet from './AddToPlaylistSheet.vue';
 import CommentSheet from './CommentSheet.vue';
+import BarrageLayer from './BarrageLayer.vue';
 import {
   formatTime,
   useLyrics,
@@ -143,6 +144,9 @@ const isPortrait = computed(() => skin.value === 'portrait');
 const showCover = computed(() => skin.value === 'cover');
 /** 封面模式的氛围背景 = 同一张封面（同一张图放大模糊，零额外网络与内存） */
 const coverBackdrop = computed(() => track.value?.coverUrl || track.value?.cover || '');
+
+/** 弹幕要以歌曲 hash 拉取（不是 mixSongId）；没有 hash 就不渲染这一层 */
+const barrageHash = computed(() => String(track.value?.hash ?? ''));
 
 /* ── 播放模式图标（循环按钮不用文字） ── */
 const playModeIcon = computed(() => {
@@ -269,6 +273,9 @@ onBeforeUnmount(() => {
     </header>
 
     <div class="player-stage" :class="{ 'is-lyrics-only': skin === 'lyric' }">
+      <!-- 弹幕：浮在主视觉（封面 / 歌词）之上，在底栏之下 -->
+      <BarrageLayer v-if="barrageHash" :hash="barrageHash" :playing="isPlaying" />
+
       <!-- 封面（仅封面模式） -->
       <CoverPanel
         v-if="showCover"
@@ -551,6 +558,7 @@ onBeforeUnmount(() => {
 
 /* ── 中部：封面 / 歌名 / 歌词 纵向排列 ── */
 .player-stage {
+  position: relative;
   flex: 1;
   min-height: 0;
   display: flex;

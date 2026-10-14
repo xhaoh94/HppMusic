@@ -71,7 +71,6 @@ import * as tablerRepeat from '@iconify/icons-tabler/repeat';
 import * as tablerRepeatOnce from '@iconify/icons-tabler/repeat-once';
 import * as tablerSearch from '@iconify/icons-tabler/search';
 import * as tablerSettings from '@iconify/icons-tabler/settings';
-import * as tablerShare from '@iconify/icons-tabler/share';
 import * as tablerShield from '@iconify/icons-tabler/shield';
 import * as tablerShirt from '@iconify/icons-tabler/shirt';
 import * as tablerSparkles from '@iconify/icons-tabler/sparkles';
@@ -154,7 +153,6 @@ export const repeat = icon(tablerRepeat, 'repeat');
 export const repeatOnce = icon(tablerRepeatOnce, 'repeat-once');
 export const search = icon(tablerSearch, 'search');
 export const settings = icon(tablerSettings, 'settings');
-export const share = icon(tablerShare, 'share');
 export const shield = icon(tablerShield, 'shield');
 export const shirt = icon(tablerShirt, 'shirt');
 export const sparkles = icon(tablerSparkles, 'sparkles');
@@ -218,7 +216,6 @@ export const iconSpeed = clock;
 export const iconPlaylistAdd = playlistAdd;
 export const iconVideo = video;
 export const iconBarrage = message2;
-export const iconShare = share;
 export const iconShirt = shirt;
 
 /* ── 自绘图标 ──
