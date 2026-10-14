@@ -239,16 +239,35 @@ onMounted(() => {
 }
 
 /*
- * 一级分类：7 个固定数量，**换行**全部显示。
+ * 一级分类：**由 grid 自己决定每行放几个**，不写死任何宽度。
  *
- * 原来用横滑，但 7 个 chip（每个约 65px）超出窄屏约 90px —— 最后一个被切掉一半，
- * 看上去像坏了，而“能滑”这件事没有明显提示。数量固定且不多，换行是最直接的解法。
+ * `auto-fit` + `minmax(calc(2em + 内边距), 1fr)`：
+ * · 下限 = 「**两个汉字 + 左右内边距**」，全由 token 与字号算出，不写裸像素：
+ *   服务端换个更长的分类名、或者以后调字号，列宽自己会跟着变；
+ * · 能放几列就放几列（440px 一行 7 个，窄屏自动变两行）；
+ * · 空列被折叠，剩下的列平分整行，所以宽屏上不会右边留一串空白。
+ *
+ * ⚠️ 不要用 `minmax(min-content, ...)`：在 `auto-fit` 里它会被算成
+ * 整行的最小内容宽，结果退化成**一列**（实测每个 chip 各占一行）。
+ *
+ * 也试过 flex：`flex-wrap` + `flex: 1 1 auto` 会自己折行，但**最后一行只剩一个时
+ * 会被 flex-grow 拉满整行**（实测 320px 下那个 chip 宽 288px）。
+ * grid 的每项最多只占一列，不会出现这个情况。
  */
 .chips.is-primary {
-  flex-wrap: wrap;
-  row-gap: var(--sp-2);
-  /* 一级行间距收窄，为“一行放下 7 个”多腾出一点宽度 */
-  column-gap: var(--sp-2);
+  display: grid;
+  /* 与 chip 同字号，让下面 em 的基准可预期（em 认的是容器自己的 font-size） */
+  font-size: var(--font-sm);
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(calc(2em + var(--sp-3) * 2), 1fr)
+  );
+  gap: var(--sp-2);
+}
+
+.chips.is-primary .chip {
+  /* 分类名不拆行：折行交给 chip 之间的换行，而不是把名字断成两截 */
+  white-space: nowrap;
 }
 
 /*
@@ -256,6 +275,7 @@ onMounted(() => {
  * 两级交互不一样是有意的：一级少而固定，二级多而可变。
  */
 .chips.is-secondary {
+  display: flex;
   flex-wrap: nowrap;
   overflow-x: auto;
   overscroll-behavior-x: contain;
@@ -268,11 +288,14 @@ onMounted(() => {
   display: none;
 }
 
+.chips.is-secondary .chip {
+  /* 二级是横滑的，不能被拉伸：否则每屏少见的几个标签会被拉得很宽 */
+  flex: 0 0 auto;
+}
+
 .chip {
   flex: 0 0 auto;
   min-height: 32px;
-  /* 横向内边距收窄（原 --sp-4）：一级 7 个 chip 在 440px 宽屏上能刚好排成一行，
-     而不是把「年代」单独挤到第二行。窄屏仍然会自动折行（父级是 flex-wrap）。 */
   padding: 0 var(--sp-3);
   border-radius: var(--radius-pill);
   font-size: var(--font-sm);
