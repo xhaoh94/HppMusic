@@ -1,133 +1,210 @@
 /**
- * 由一份 SVG 生成 Android 启动图标（各密度 PNG + 自适应图标的背景）。
+ * 由 `logo-icon-only.png` 生成 Android 启动图标（各密度 PNG + 自适应图标的背景）。
  *
  * 用法：node scripts/dev/gen-app-icon.mjs
- *       node scripts/dev/icon-options.mjs   # 看候选方案对比图
+ *
+ * ## 源文件就是设计稿，不要去"照着画"
+ *
+ * `logo-icon-only.png` 是用户提供的 logo 图形（800×600 白底、图形居中、约 176×175）。
+ * 早先我试图用 SVG 的 path 数据手工重画，结果形状完全不对 —— 这个图形是
+ * **深蓝圆环 + 环内一个深蓝音符**，音符的杆从圆顶向下接圆头，剩下的负空间
+ * 是个不规则的逗号形。这种形状凭坐标猜是猜不出来的，只能取像素。
+ *
+ * 所以这里直接**从 PNG 裁出图形**，只负责按 Android 的规范重新排版。
  *
  * ⚠️ minSdk 是 24（低于 26），所以**不能只给自适应图标** ——
  * API 24/25 读的是 mipmap-<density>/ic_launcher.png，必须一并生成。
  *
- * ## 设计来源
+ * ## 三个变体
  *
- * 用户提供的 logo：**深蓝圆盘，内部挖掉一个白色内孔，孔里再放一个深蓝音符。**
- * 原稿里还有「音乐」两个大字和一行「MUSIC」—— 图标在桌面上只有 48dp 上下，
- * 任何文字在那里都读不出来，所以只保留图形，名字交给 launcher 显示。
- *
- * ⚠️ 这一版的形状**返工过一次**，第一次理解反了：
- * 做成了"实心深蓝圆 + 白色音符画在上面"，但原稿是"挖空的圆 + 深蓝音符"。
- * 区别在圆到底是一个**环**还是一个**实心盘** —— 一眼就能看出不同。
- *
- * ## 内孔是"真挖穿"，不是画个白圆
- *
- * 画个和背景同色的白圆看起来也能出效果，但 `ic_launcher_foreground.png` 是
- * **透明底**的：那里画白圆会得到一块不透明的浅色，叠在自适应图标的背景层上
- * 就显出一圈色差。
- *
- * 实现用"外圆 + 内孔"两条子路径配 `fill-rule="evenodd"`，音符再作为独立元素填回孔里。
- * 比 `<mask>` 少一层 defs 和 id 管理（一份 SVG 里多个变体时 id 还容易撞），
- * 而且这个写法在浏览器和 librsvg 上行为一致。
+ * · `ic_launcher.png` / `ic_launcher_round.png` —— 白底 + 图形，占画布约 70%；
+ * · `ic_launcher_foreground.png` —— **透明底** + 图形，占安全区（中心 72×72）约 89%。
+ *   图形里的白色被抠成透明（只留深蓝），所以它和背景层合成后与方形图标一致；
+ * · 背景层 —— `@color/ic_launcher_background`，就是白。
  */
-
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import sharp from 'sharp';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const RES = path.join(ROOT, 'android/app/src/main/res');
+const SOURCE = path.join(ROOT, 'logo-icon-only.png');
 
-/** 品牌色（取自用户提供的 logo） */
-const INK = '#1C3B5D';
-const PAPER = '#F2F5F8';
+const PAPER = '#FFFFFF';
+
+/** 源图里"非白即图形"的判定余量（留给抗锯齿边缘） */
+const WHITE_CUTOFF = 240;
 
 /**
- * 图形本体：外圆 r=38，内孔 r=23（圆环厚 15，约占半径 39%），孔里是深蓝音符。
+ * 找图形的包围盒。
  *
- * 音符的三个部分（对着原稿定的）：
- * · **符头是正圆**（不是记谱那种斜椭圆）—— 原稿就是图标化的正圆；
- * · **杆细**（9），从内孔上部往下接到符头；
- * · **符尾**从杆顶向右下弯一小段（约杆长的 1/3）—— 少了它"圆头 + 竖杆"
- *   会读成感叹号，拉长了又读成钩子。
+ * 不硬编码坐标：换了设计稿就要改常数，而且改错了不会报错、只会静默裁歪。
+ */
+const findInkBbox = async (file) => {
+  const { data, info } = await sharp(file).raw().toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  let x0 = width;
+  let x1 = -1;
+  let y0 = height;
+  let y1 = -1;
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const i = (y * width + x) * channels;
+      if (data[i] < WHITE_CUTOFF || data[i + 1] < WHITE_CUTOFF || data[i + 2] < WHITE_CUTOFF) {
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (y < y0) y0 = y;
+        if (y > y1) y1 = y;
+      }
+    }
+  }
+  if (x1 < 0) throw new Error(`${file} 里没找到非白像素，图形是不是全白？`);
+  // 取正方形边长，避免非等比源图把图形拉伸
+  const size = Math.max(x1 - x0 + 1, y1 - y0 + 1);
+  const cx = Math.round((x0 + x1) / 2);
+  const cy = Math.round((y0 + y1) / 2);
+  return {
+    left: Math.max(0, cx - Math.round(size / 2)),
+    top: Math.max(0, cy - Math.round(size / 2)),
+    size,
+  };
+};
+
+const box = await findInkBbox(SOURCE);
+console.log(`[app-icon] 源图图形包围盒 ${box.size}×${box.size} @ (${box.left},${box.top})`);
+
+/** 裁出的图形（白底，未抠图） */
+const inkCrop = () =>
+  sharp(SOURCE).extract({ left: box.left, top: box.top, width: box.size, height: box.size });
+
+/**
+ * 把白色抠成透明，只留深蓝笔触。
  *
- * 音符在内孔里**略偏左**：符尾占掉右上角，视觉重心靠左反而更稳。
+ * 用亮度做**平滑**过渡而不是二值化：二值化会把抗锯齿边缘切成硬边，缩到 48dp 后
+ * 会看到一圈锯齿。深蓝的最亮通道是 97，白是 255，在两者之间线性映射 alpha。
  */
-const MARK = `
-  <path fill-rule="evenodd" fill="${INK}" d="
-    M16,54 a38,38 0 1,0 76,0 a38,38 0 1,0 -76,0 Z
-    M31,54 a23,23 0 1,0 46,0 a23,23 0 1,0 -46,0 Z"/>
-  <g fill="${INK}">
-    <circle cx="45" cy="68" r="11"/>
-    <rect x="52" y="28" width="9" height="42" rx="4.5"/>
-  </g>
-  <path d="M61 28 q13 4 13 18" stroke="${INK}" stroke-width="9" fill="none" stroke-linecap="round"/>`;
-
-/** 把整块图形缩放到目标占比，围绕圆心缩放 —— 否则会越缩越偏 */
-const markGroup = (scale) =>
-  `<g transform="translate(54 54) scale(${scale}) translate(-54 -54)">${MARK}</g>`;
+const transparentInk = async () => {
+  const { data, info } = await inkCrop()
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  const out = Buffer.alloc(width * height * 4);
+  const LOW = 97;
+  const HIGH = 255;
+  for (let i = 0, o = 0; i < data.length; i += channels, o += 4) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const lum = Math.max(r, g, b);
+    const t = Math.min(1, Math.max(0, (HIGH - lum) / (HIGH - LOW)));
+    out[o] = r;
+    out[o + 1] = g;
+    out[o + 2] = b;
+    out[o + 3] = Math.round(t * 255);
+  }
+  return sharp(out, { raw: { width, height, channels: 4 } }).png().toBuffer();
+};
 
 /**
- * 传统方形图标：图形按**画布**比例算，占约 70%（外圆直径 76 / 108）。
- * 形状本身已按 108 画布设计好，所以这里 scale = 1。
- */
-const LEGACY_SCALE = 1;
-
-/**
- * 自适应前景：只显示中心 **72×72**，而且 launcher 会把这 72dp **放大**到
- * 图标实际尺寸 —— 所以内容占 108 画布的 x%，到桌面上看到的是 x/72。
+ * 传统方形图标：图形占画布的约 72%（试过 80%，图形顶到边了）。
+ * 注意这里的"画布"就是最终图标，没有自适应那层放大。
  *
- * 0.84 × 76 = 64，占安全区的 89%。圆形主体本来就该几乎占满安全区。
+ * 图形本身是**圆形**，所以占比可以给得比"方形内容"更高：被 launcher 的圆角
+ * 遮罩切到的只是四角，而那四角在源图里本来就是空的。
  */
-const FOREGROUND_SCALE = 0.84;
-
+const LEGACY_INK_RATIO = 0.72;
 /**
- * 圆形图标：外圆要铺满整个 108 画布，所以 38 → 54，放大 1.42 倍。
- * 这里是**整块图形**一起放大（内孔和音符跟着走）—— 它们本来就是同一个 logo，
- * 不像上一版那样需要在圆盘和音符之间区分缩放。
+ * 自适应前景：只显示中心 72×72，而且 launcher 会把这 72dp **放大**到图标实际尺寸。
+ *
+ * 用户反馈过"太小" —— 这个比例才是桌面上真正看到的，别按画布比例去估。
+ * 0.94 × 72 = 67.7，靠安全区内切；再大就会顶到遮罩。
  */
-const ROUND_SCALE = 54 / 38;
+const FOREGROUND_INK_RATIO = 0.94;
 
-const SHAPES = (body) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">${body}</svg>`;
+const CANVAS = 108;
+const SAFE = 72;
 
-/** 方形完整图标：浅色纸底 + 图形 */
-const squareIcon = (scale = LEGACY_SCALE) =>
-  SHAPES(`<rect width="108" height="108" fill="${PAPER}"/>${markGroup(scale)}`);
-
-/** 圆形完整图标：圆形纸底，四角透明。图形放大到刚好铺满这个圆 */
-const roundIcon = (scale = ROUND_SCALE) =>
-  SHAPES(`
-  <defs><clipPath id="c"><circle cx="54" cy="54" r="54"/></clipPath></defs>
-  <g clip-path="url(#c)">
-    <rect width="108" height="108" fill="${PAPER}"/>
-    ${markGroup(scale)}
-  </g>`);
-
-/** 自适应图标前景：**透明底**，只有图形，缩放到安全区的约 89% */
-const foregroundIcon = (scale = FOREGROUND_SCALE) => SHAPES(markGroup(scale));
+const icon = (body) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${CANVAS} ${CANVAS}" width="${CANVAS}" height="${CANVAS}">${body}</svg>`;
 
 /** density → 传统图标边长（dp 基准 48） */
 const LEGACY_SIZES = { mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 };
 /** 自适应前景是 108dp 满画布 */
 const FOREGROUND_SIZES = { mdpi: 108, hdpi: 162, xhdpi: 216, xxhdpi: 324, xxxhdpi: 432 };
 
-const render = async (svg, size, outPath) => {
+/** 图形居中叠到画布上 */
+const place = (markUri, target, size) => {
+  const offset = (size - target) / 2;
+  return { input: markUri, left: Math.round(offset), top: Math.round(offset) };
+};
+
+const renderLegacy = async (outPath, size) => {
+  const target = Math.round(size * LEGACY_INK_RATIO);
+  const mark = await inkCrop().resize(target, target, { fit: 'contain', background: PAPER }).png().toBuffer();
   mkdirSync(path.dirname(outPath), { recursive: true });
-  await sharp(Buffer.from(svg)).resize(size, size).png().toFile(outPath);
+  await sharp({
+    create: { width: size, height: size, channels: 4, background: PAPER },
+  })
+    .composite([place(mark, target, size)])
+    .png()
+    .toFile(outPath);
+};
+
+const renderRound = async (outPath, size) => {
+  const target = Math.round(size * LEGACY_INK_RATIO);
+  const mark = await inkCrop().resize(target, target, { fit: 'contain', background: PAPER }).png().toBuffer();
+  mkdirSync(path.dirname(outPath), { recursive: true });
+
+  /**
+   * 必须**分两步**：先把"白底 + 图形"合成成一张位图，再用圆形遮罩去 alpha。
+   *
+   * 把两次 composite 串在同一个 pipeline 里（第二个用 blend: 'dest-in'）时，
+   * 实测输出是一张**纯白** —— 图形根本没被合上去，而且不报任何错。
+   */
+  const flat = await sharp({
+    create: { width: size, height: size, channels: 4, background: PAPER },
+  })
+    .composite([place(mark, target, size)])
+    .png()
+    .toBuffer();
+
+  const circle = Buffer.from(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="#ffffff"/></svg>`,
+  );
+  await sharp(flat).composite([{ input: circle, blend: 'dest-in' }]).png().toFile(outPath);
+};
+
+/**
+ * 自适应前景：透明底 + 抠过图的图形。
+ *
+ * 用**目标像素尺寸**而不是 SVG 缩放：图形本身是位图，让 SVG 去缩放等于再插值一次，
+ * 直接按目标尺寸 resize 出来的边缘更干净。
+ */
+const renderForeground = async (outPath, size) => {
+  const target = Math.round((size * (SAFE / CANVAS) * FOREGROUND_INK_RATIO));
+  const mark = await sharp(await transparentInk())
+    .resize(target, target, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toBuffer();
+  mkdirSync(path.dirname(outPath), { recursive: true });
+  await sharp({
+    create: { width: size, height: size, channels: 4, background: { r: 0, g: 0, b: 0, alpha: 0 } },
+  })
+    .composite([place(mark, target, size)])
+    .png()
+    .toFile(outPath);
 };
 
 for (const [density, size] of Object.entries(LEGACY_SIZES)) {
-  await render(squareIcon(), size, path.join(RES, `mipmap-${density}/ic_launcher.png`));
-  await render(roundIcon(), size, path.join(RES, `mipmap-${density}/ic_launcher_round.png`));
+  await renderLegacy(path.join(RES, `mipmap-${density}/ic_launcher.png`), size);
+  await renderRound(path.join(RES, `mipmap-${density}/ic_launcher_round.png`), size);
 }
 for (const [density, size] of Object.entries(FOREGROUND_SIZES)) {
-  await render(
-    foregroundIcon(),
-    size,
-    path.join(RES, `mipmap-${density}/ic_launcher_foreground.png`),
-  );
+  await renderForeground(path.join(RES, `mipmap-${density}/ic_launcher_foreground.png`), size);
 }
 
-/** 背景用纯色就够了（logo 本身是双色） */
 writeFileSync(
   path.join(RES, 'values/ic_launcher_background.xml'),
   `<?xml version="1.0" encoding="utf-8"?>
