@@ -23,7 +23,6 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
-import PageHeader from '@mobile/components/PageHeader.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
 import Sheet from '@mobile/components/Sheet.vue';
 import MediaCard from '@mobile/components/MediaCard.vue';
@@ -203,33 +202,26 @@ const goBackToList = () => {
 
 <template>
   <div class="lt-page">
-    <PageHeader :title="room.joined ? roomTitle : '一起听'">
-      <template #actions>
-        <button
-          v-if="!room.joined"
-          type="button"
-          class="header-action"
-          :disabled="busy"
-          aria-label="用当前队列开房间"
-          @click="createRoom"
-        >
-          <Icon :icon="iconAdd" width="18" height="18" />
-        </button>
-        <button
-          v-else
-          type="button"
-          class="header-action is-danger"
-          :disabled="busy"
-          @click="leave"
-        >
-          退出房间
-        </button>
-      </template>
-    </PageHeader>
+    <!--
+      不放 PageHeader：页面在「主页」分区下，顶部子页签栏已表明位置。
+      功能性按钮改成了不占布局高度的形式：列表页用右下角悬浮钮（FAB），
+      房间内把「退出房间」放到房间信息行右侧。
+    -->
 
     <!-- ── 房间内 ── -->
     <template v-if="room.joined">
       <div class="room-head">
+        <div class="room-head-top">
+          <p class="room-name ellipsis">{{ roomTitle }}</p>
+          <button
+            type="button"
+            class="leave-button"
+            :disabled="busy"
+            @click="leave"
+          >
+            退出房间
+          </button>
+        </div>
         <div class="members">
           <template v-for="member in memberList" :key="member.userId">
             <div class="member" :class="{ 'is-owner': String(member.userId) === String(room.activeRoom?.ownerId) }">
@@ -302,36 +294,49 @@ const goBackToList = () => {
     </template>
 
     <!-- ── 房间列表 ── -->
-    <div v-else class="page-body scroll-y">
-      <EmptyState v-if="room.loadingRooms && !room.rooms.length" tone="loading" title="正在加载房间" />
-      <EmptyState
-        v-else-if="!room.rooms.length"
-        title="暂时没有开放的房间"
-        description="点右上角＋，用你正在听的队列开一间"
-      />
+    <div v-else class="page-body">
+      <!-- 悬浮创建钮：不占布局高度，也不会像顶部工具栏那样与子页签栏挤在一起 -->
+      <button
+        type="button"
+        class="fab"
+        :disabled="busy"
+        aria-label="用当前队列开房间"
+        @click="createRoom"
+      >
+        <Icon :icon="iconAdd" width="24" height="24" />
+      </button>
 
-      <template v-else>
-        <div class="grid">
-          <MediaCard
-            v-for="item in room.rooms"
-            :key="item.id"
-            :cover="item.ownerAvatarUrl"
-            :title="item.name"
-            :subtitle="`${item.ownerName} · ${item.memberCount} 人`"
-            @select="openPreview(item)"
-          />
-        </div>
-        <button
-          v-if="!room.roomsEnded"
-          type="button"
-          class="load-more"
-          :disabled="room.loadingRooms"
-          @click="loadMore"
-        >
-          {{ room.loadingRooms ? '加载中…' : '加载更多' }}
-        </button>
-        <p v-else class="list-end">没有更多房间了</p>
-      </template>
+      <div class="page-body-scroll scroll-y">
+        <EmptyState v-if="room.loadingRooms && !room.rooms.length" tone="loading" title="正在加载房间" />
+        <EmptyState
+          v-else-if="!room.rooms.length"
+          title="暂时没有开放的房间"
+          description="点右下角＋，用你正在听的队列开一间"
+        />
+
+        <template v-else>
+          <div class="grid">
+            <MediaCard
+              v-for="item in room.rooms"
+              :key="item.id"
+              :cover="item.ownerAvatarUrl"
+              :title="item.name"
+              :subtitle="`${item.ownerName} · ${item.memberCount} 人`"
+              @select="openPreview(item)"
+            />
+          </div>
+          <button
+            v-if="!room.roomsEnded"
+            type="button"
+            class="load-more"
+            :disabled="room.loadingRooms"
+            @click="loadMore"
+          >
+            {{ room.loadingRooms ? '加载中…' : '加载更多' }}
+          </button>
+          <p v-else class="list-end">没有更多房间了</p>
+        </template>
+      </div>
     </div>
   </div>
 
@@ -381,15 +386,70 @@ const goBackToList = () => {
   background: var(--accent-soft);
 }
 
-.header-action.is-danger {
-  color: var(--danger);
-  background: rgba(244, 69, 61, 0.14);
-}
-
 .page-body {
+  position: relative;
   flex: 1;
   min-height: 0;
-  padding-bottom: var(--sp-6);
+  display: flex;
+  flex-direction: column;
+}
+
+.page-body-scroll {
+  flex: 1;
+  min-height: 0;
+  padding-bottom: var(--sp-10);
+}
+
+/* 悬浮创建钮 */
+.fab {
+  position: absolute;
+  right: var(--sp-4);
+  /* 停在底部栏上方（内容区已被外壳扣掉底部高度，这里再留一点） */
+  bottom: var(--sp-4);
+  z-index: var(--z-sticky);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  color: var(--accent-on);
+  background: var(--accent);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.fab:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.fab:disabled {
+  opacity: 0.6;
+}
+
+/* 房间内顶部：房名 + 退出，同一行不额外占高度 */
+.room-head-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
+}
+
+.room-name {
+  margin: 0;
+  font-size: var(--font-xl);
+  font-weight: var(--weight-bold);
+}
+
+.leave-button {
+  flex: 0 0 auto;
+  min-height: 32px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-sm);
+  color: var(--danger);
+  background: rgba(244, 69, 61, 0.14);
 }
 
 .grid {

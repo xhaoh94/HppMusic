@@ -20,7 +20,6 @@
  * （只是**本地过滤**，不触发搜索接口 —— 它是"在结果里找"，不是"搜全网"）。
  */
 import { computed, onMounted, ref } from 'vue';
-import PageHeader from '@mobile/components/PageHeader.vue';
 import SongRow from '@mobile/components/SongRow.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
 import { Icon } from '@iconify/vue';
@@ -111,40 +110,43 @@ onMounted(() => void load());
 
 <template>
   <div class="free-page">
-    <PageHeader title="免费听">
-      <template #actions>
+    <!--
+      不放 PageHeader：页面已经在「主页」分区下，顶部子页签栏已经表明当前位置，
+      再顶一行「‹ 免费听」是重复信息（用户直接反馈过）。
+      原本在 PageHeader 里的「换一批」挪到搜索栏右侧，省下一整行高度。
+    -->
+    <div class="toolbar">
+      <div class="search-bar">
+        <Icon :icon="iconSearch" width="16" height="16" class="search-icon" />
+        <input
+          v-model="searchQuery"
+          class="search-input"
+          type="search"
+          enterkeyhint="search"
+          autocapitalize="off"
+          autocomplete="off"
+          placeholder="在本批推荐中查找"
+          aria-label="在本批推荐中查找"
+        />
         <button
+          v-if="searchQuery"
           type="button"
-          class="header-action"
-          :disabled="loading"
-          aria-label="换一批"
-          @click="refresh"
+          class="clear-button"
+          aria-label="清空"
+          @click="clearSearch"
         >
-          <Icon :icon="iconRefresh" width="18" height="18" :class="{ spin: loading }" />
+          <Icon :icon="iconClose" width="15" height="15" />
         </button>
-      </template>
-    </PageHeader>
+      </div>
 
-    <div class="search-bar">
-      <Icon :icon="iconSearch" width="16" height="16" class="search-icon" />
-      <input
-        v-model="searchQuery"
-        class="search-input"
-        type="search"
-        enterkeyhint="search"
-        autocapitalize="off"
-        autocomplete="off"
-        placeholder="在本批推荐中查找"
-        aria-label="在本批推荐中查找"
-      />
       <button
-        v-if="searchQuery"
         type="button"
-        class="clear-button"
-        aria-label="清空"
-        @click="clearSearch"
+        class="refresh-button"
+        :disabled="loading"
+        aria-label="换一批"
+        @click="refresh"
       >
-        <Icon :icon="iconClose" width="15" height="15" />
+        <Icon :icon="iconRefresh" width="18" height="18" :class="{ spin: loading }" />
       </button>
     </div>
 
@@ -214,16 +216,44 @@ onMounted(() => void load());
   background: var(--fill-muted);
 }
 
-.search-bar {
+/* 搜索栏 + 换一批：同一行 */
+.toolbar {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-4) var(--sp-2);
+}
+
+.search-bar {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
   height: 40px;
-  margin: 0 var(--sp-4) var(--sp-2);
   padding: 0 var(--sp-3);
   border-radius: var(--radius-pill);
   background: var(--bg-input);
+}
+
+.refresh-button {
+  flex: 0 0 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  color: var(--text-secondary);
+}
+
+.refresh-button:disabled {
+  opacity: 0.5;
+}
+
+.refresh-button:active:not(:disabled) {
+  background: var(--fill-muted);
 }
 
 .search-icon {
