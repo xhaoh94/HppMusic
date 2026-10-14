@@ -21,10 +21,14 @@ import { computed, ref, watch } from 'vue';
 import { Icon } from '@iconify/vue';
 import Sheet from '@mobile/components/Sheet.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
+import ActionSheet from '@mobile/components/ActionSheet.vue';
 import { useInfiniteList } from '@mobile/composables/useInfiniteList';
 import { useNowPlaying } from '@mobile/adapters/player';
+import { deleteComment, replyComment, sendMusicComment } from '@mobile/adapters/comment';
 import { getMusicComments } from '@/api/comment';
 import { mapCommentItem } from '@/utils/mappers';
+import { useUserStore } from '@/stores/user';
+import { useToastStore } from '@/stores/toast';
 import logger from '@/utils/logger';
 import { iconUser } from '@mobile/icons';
 import type { Comment } from '@/models/comment';
@@ -33,6 +37,8 @@ const props = defineProps<{ modelValue: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
 
 const { track } = useNowPlaying();
+const user = useUserStore();
+const toast = useToastStore();
 
 const PAGE_SIZE = 30;
 const mixSongId = computed(() => String(track.value?.mixSongId ?? ''));
@@ -69,6 +75,94 @@ watch(
 const avatarFailed = ref<Set<string>>(new Set());
 const onAvatarError = (key: string) => {
   avatarFailed.value = new Set([...avatarFailed.value, key]);
+};
+
+/* ────────────────────────────────────────────────────────
+   发表 / 回复 / 删除
+   ──────────────────────────────────────────────────────── */
+
+const draft = ref('');
+/** 正在回复的目标；为空表示发顶层评论 */
+const replyTo = ref<Comment | null>(null);
+const submitting = ref(false);
+
+const sheetOpen = ref(false);
+const selectedComment = ref<Comment | null>(null);
+
+const currentUserId = computed(() => String(user.info?.userid ?? ''));
+/** 只能删自己的评论（服务端也会拦，但先在界面上不给自己添堵） */
+const isOwnComment = (comment: Comment) =>
+  Boolean(currentUserId.value) && String(comment.userId ?? '') === currentUserId.value;
+
+const sheetItems = computed(() => {
+  const comment = selectedComment.value;
+  if (!comment) return [];
+  const items = [
+    { key: 'reply', label: '回复', description: `回复 ${comment.userName || '这条评论'}` },
+  ];
+  if (isOwnComment(comment)) {
+    items.push({
+      key: 'delete',
+      label: '删除',
+      description: '删除后不可恢复',
+      danger: true,
+    } as never);
+  }
+  return items;
+});
+
+const onLongPress = (comment: Comment) => {
+  selectedComment.value = comment;
+  sheetOpen.value = true;
+};
+
+const onSheetSelect = async (key: string) => {
+  const comment = selectedComment.value;
+  selectedComment.value = null;
+  if (!comment) return;
+
+  if (key === 'reply') {
+    replyTo.value = comment;
+    return;
+  }
+  if (key === 'delete') {
+    try {
+      await deleteComment(String(comment.id));
+      toast.success('已删除');
+      void list.reload();
+    } catch (error) {
+      toast.danger(error instanceof Error ? error.message : '删除失败');
+    }
+  }
+};
+
+const cancelReply = () => {
+  replyTo.value = null;
+};
+
+const submitDraft = async () => {
+  const text = draft.value.trim();
+  if (!text || submitting.value) return;
+  submitting.value = true;
+  try {
+    if (replyTo.value) {
+      await replyComment(replyTo.value, text);
+      toast.success('已回复');
+    } else {
+      if (!mixSongId.value) throw new Error('当前曲目不支持评论');
+      await sendMusicComment(mixSongId.value, text);
+      toast.success('已发表');
+    }
+    draft.value = '';
+    replyTo.value = null;
+    // 重新拉第一页：新评论在最前面
+    void list.reload();
+  } catch (error) {
+    logger.warn('Comment', 'Submit failed', error);
+    toast.danger(error instanceof Error ? error.message : '发表失败，请稍后重试');
+  } finally {
+    submitting.value = false;
+  }
 };
 
 const avatarOf = (comment: Comment) => comment.userPic || comment.avatar || '';
@@ -115,7 +209,14 @@ const formatTime = (value: unknown) => {
     />
 
     <div v-else class="comment-list">
-      <article v-for="comment in list.items.value" :key="String(comment.id)" class="comment">
+      <article
+        v-for="comment in list.items.value"
+        :key="String(comment.id)"
+        class="comment"
+        @pointerdown.passive="() => undefined"
+        @contextmenu.prevent
+        @click="onLongPress(comment)"
+      >
         <div class="avatar">
           <img
             v-if="avatarOf(comment) && !avatarFailed.has(String(comment.id))"
@@ -147,7 +248,42 @@ const formatTime = (value: unknown) => {
         <template v-else-if="!list.hasMore.value">没有更多评论了</template>
       </div>
     </div>
+
+    <!-- 发表／回复：固定在底部（键盘弹出时会跟着上移，因为它是 Sheet 内的固定区） -->
+    <template #footer>
+      <div class="composer">
+        <p v-if="replyTo" class="reply-hint">
+          回复 {{ replyTo.userName || '这条评论' }}
+          <button type="button" class="reply-cancel" @click="cancelReply">取消</button>
+        </p>
+        <div class="composer-row">
+          <input
+            v-model="draft"
+            class="composer-input"
+            type="text"
+            :placeholder="replyTo ? '写下回复…' : '说点什么…'"
+            :disabled="submitting"
+            @keyup.enter="submitDraft"
+          />
+          <button
+            type="button"
+            class="composer-submit"
+            :disabled="submitting || !draft.trim()"
+            @click="submitDraft"
+          >
+            {{ submitting ? '发送中' : '发送' }}
+          </button>
+        </div>
+      </div>
+    </template>
   </Sheet>
+
+  <ActionSheet
+    v-model="sheetOpen"
+    :subject="selectedComment?.content"
+    :items="sheetItems"
+    @select="onSheetSelect"
+  />
 </template>
 
 <style scoped>
@@ -160,6 +296,9 @@ const formatTime = (value: unknown) => {
   display: flex;
   gap: var(--sp-3);
   padding: var(--sp-3) 0;
+  /* 长按选中文字会和长按菜单冲突，禁掉选择 */
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .comment + .comment {
@@ -245,5 +384,64 @@ const formatTime = (value: unknown) => {
   font-size: var(--font-sm);
   color: var(--accent);
   background: var(--accent-soft);
+}
+
+/* ── 发表／回复 ── */
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.reply-hint {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin: 0;
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.reply-cancel {
+  color: var(--accent);
+  font-size: var(--font-xs);
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+
+.composer-input {
+  flex: 1;
+  min-width: 0;
+  height: 40px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--divider);
+  background: var(--bg-input);
+  font-size: var(--font-sm);
+  outline: none;
+}
+
+.composer-input:focus {
+  border-color: var(--accent);
+}
+
+.composer-submit {
+  flex: 0 0 auto;
+  min-height: 36px;
+  padding: 0 var(--sp-4);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-sm);
+  font-weight: var(--weight-semibold);
+  color: var(--accent-on);
+  background: var(--accent);
+}
+
+.composer-submit:disabled {
+  opacity: 0.45;
 }
 </style>

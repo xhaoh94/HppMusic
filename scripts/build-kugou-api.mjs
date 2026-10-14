@@ -65,6 +65,16 @@ const REQUIRED_ROUTES = [
   '/user/update/avatar',
   '/playlist/pic/upload',
   '/user/cloud/upload',
+  /**
+   * 发表歌曲评论（顶层）。
+   *
+   * 内核渲染层没有调用它（`api/comment.ts` 只有取数据的一套），
+   * 所以路由扫描扫不到 —— 但 server/module 里有完整实现（`comment_music_send.js`），
+   * 移动端要支持发评论必须显式加进来。
+   * （回复走 `/comment/floor/send`、删除走 `/comment/music/del`，
+   *  那两个内核有调用，已经在包里了。）
+   */
+  '/comment/music/send',
 ];
 const DYNAMIC_ROUTE_FILES = [path.join(RENDERER, 'api', 'listenTogether.ts')];
 const UNSUPPORTED_ROUTES = new Map([
