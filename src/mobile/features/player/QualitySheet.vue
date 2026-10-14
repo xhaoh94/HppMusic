@@ -55,11 +55,24 @@ const accessEntry = computed(() => {
   return qualityAccess.entries.get(key) ?? null;
 });
 
+/**
+ * 配置的档位（设置里的默认音质，或本次曲目的临时选择）。
+ *
+ * ⚠️ 它**只是个请求**，不代表实际拿到的东西 —— 内核默认值就是 `high`
+ * （`stores/setting.ts` 的 `defaultAudioQuality`），而无权限的账号会被自动降级。
+ * 要“当前实际在用什么”，看下面的 `effectiveQuality`。
+ */
 const currentQuality = computed<AudioQualityValue>(() => {
   const override = (player as unknown as { currentAudioQualityOverride?: AudioQualityValue | null })
     .currentAudioQualityOverride;
   return override ?? setting.defaultAudioQuality;
 });
+
+/** 候选顺序：与内核 `AUDIO_QUALITY_ORDER` 的前四档一致（从低到高） */
+const QUALITY_VALUES = QUALITIES.map((item) => item.value);
+
+const labelOf = (quality: AudioQualityValue) =>
+  QUALITIES.find((item) => item.value === quality)?.label ?? quality;
 
 /** 置灰原因；空串表示可选 */
 const reasonOf = (quality: AudioQualityValue): string => {
@@ -83,6 +96,23 @@ const reasonOf = (quality: AudioQualityValue): string => {
     qualityAccess.membership,
   );
 };
+
+/**
+ * **实际生效**的档位。
+ *
+ * 内核会自动往下兼容：`getSongQualityCandidates` 就是从配置档位起、
+ * 按 128→320→flac→high 逐级往下找第一个可用的。这里用同一套顺序，
+ * 只是把“可用”的判据换成移动端已有的权限判定（`reasonOf`）。
+ *
+ * 勾必须打在它上面，否则界面会自相矛盾：
+ * Hi-Res 上打着勾，下面同时写着“该音质需要付费会员，当前账号暂无权限”。
+ */
+const effectiveQuality = computed<AudioQualityValue>(() => {
+  const start = QUALITY_VALUES.indexOf(currentQuality.value);
+  const candidates =
+    start >= 0 ? QUALITY_VALUES.slice(0, start + 1).reverse() : QUALITY_VALUES;
+  return candidates.find((quality) => !reasonOf(quality)) ?? QUALITY_VALUES[0];
+});
 
 const sizeOf = (quality: AudioQualityValue): string => {
   const item = accessEntry.value?.qualities?.find((entry) => entry.quality === quality);
@@ -139,6 +169,9 @@ watch(
   >
     <p class="quality-note">
       实际可用音质取决于账号权限与版权方授权；无权限的档位会标明原因。
+      <template v-if="effectiveQuality !== currentQuality">
+        当前曲目实际使用「{{ labelOf(effectiveQuality) }}」。
+      </template>
     </p>
 
     <div class="quality-list">
@@ -147,7 +180,10 @@ watch(
         :key="item.value"
         type="button"
         class="quality-item"
-        :class="{ 'is-current': item.value === currentQuality, 'is-disabled': Boolean(reasonOf(item.value)) }"
+        :class="{
+          'is-current': item.value === effectiveQuality,
+          'is-disabled': Boolean(reasonOf(item.value)),
+        }"
         @click="select(item.value)"
       >
         <span class="quality-badge" :class="`badge-${item.value}`">{{ item.badge }}</span>
@@ -157,7 +193,7 @@ watch(
             {{ reasonOf(item.value) || sizeOf(item.value) || (loadingAccess ? '正在确认权限…' : '') }}
           </span>
         </span>
-        <span v-if="item.value === currentQuality" class="quality-check" aria-hidden="true">✓</span>
+        <span v-if="item.value === effectiveQuality" class="quality-check" aria-hidden="true">✓</span>
       </button>
     </div>
   </Sheet>
