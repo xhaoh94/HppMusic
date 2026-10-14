@@ -72,6 +72,12 @@ const load = async (reset = true): Promise<boolean> => {
  * 房间列表是有可能长期不变的一块内容（不像首页每次进来都重新拉），扫一眼发现没新房间
  * 时用户需要一个明确的“再拉一次”入口。成功后报一下数量：列表本身没变化时，
  * 光看界面分不出“刷新了但确实没有”和“压根没点上”。
+ *
+ * ⚠️ 为什么不用下拉刷新
+ *
+ * 列表经常是**空的**（广场上没房间时就是空态），而下拉刷新要么依赖“内容够长能滚动”，
+ * 要么得在空态上硬挂手势 —— 恰恰在最需要刷新的场景下最不可靠。
+ * 按钮没有这个前提：它放在滚动区之外，空列表时照样看得见、点得到。
  */
 const refresh = async () => {
   if (room.loadingRooms) return;
@@ -397,8 +403,14 @@ const goBackToList = () => {
         <Icon :icon="iconAdd" width="24" height="24" />
       </button>
 
-      <!-- 刷新：列表可能长期不变，给一个明确的手动拉取入口 -->
-      <div class="list-toolbar">
+      <!--
+        列表头：刷新按钮要与它刷新的内容在一起，而不是飘在右上角。
+        原来它单独占一行（齿轮图标下面、内容上方），下面直接接左对齐的卡片，
+        右边那片空白让它看起来像个没归属的浮动元素。
+        现在跟着一个标题走，与首页的 section-header 同一套做法。
+      -->
+      <header class="list-header">
+        <h2 class="list-title">众乐房</h2>
         <button
           type="button"
           class="refresh-button"
@@ -408,13 +420,13 @@ const goBackToList = () => {
         >
           <Icon
             :icon="iconRefresh"
-            width="16"
-            height="16"
+            width="15"
+            height="15"
             :class="{ 'is-spinning': room.loadingRooms }"
           />
           刷新
         </button>
-      </div>
+      </header>
 
       <div class="page-body-scroll scroll-y">
         <EmptyState v-if="room.loadingRooms && !room.rooms.length" tone="loading" title="正在加载房间" />
@@ -546,29 +558,39 @@ const goBackToList = () => {
   flex-direction: column;
 }
 
-/* 列表工具栏：只放刷新，固定在滚动区之外（列表滚动时它不跟着跑） */
-.list-toolbar {
+/* 列表头：与首页的 section-header 同一套（左标题 + 右控件） */
+.list-header {
   flex: 0 0 auto;
   display: flex;
-  justify-content: flex-end;
-  padding: 0 var(--sp-4) var(--sp-1);
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4) var(--sp-2);
 }
 
+.list-title {
+  margin: 0;
+  font-size: var(--font-lg);
+  font-weight: var(--weight-bold);
+  color: var(--text-primary);
+}
+
+/* 轻量按钮：无底色、次要色，跟标题同一行时不会抢视线 */
 .refresh-button {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: 4px;
-  min-height: 32px;
-  padding: 0 var(--sp-3);
+  min-height: 28px;
+  padding: 0 var(--sp-2);
   border-radius: var(--radius-pill);
   font-size: var(--font-sm);
-  color: var(--text-secondary);
-  background: var(--fill-subtle);
+  color: var(--text-tertiary);
 }
 
 .refresh-button:active:not(:disabled) {
-  background: var(--fill-muted);
   color: var(--text-primary);
+  background: var(--fill-subtle);
 }
 
 .refresh-button:disabled {
