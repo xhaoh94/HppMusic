@@ -66,6 +66,26 @@ export const router = createRouter({
       component: () => import('@mobile/features/search/SearchPage.vue'),
       meta: { title: '搜索' },
     },
+
+    // ── 首页磁贴的落地页 ──
+    {
+      path: '/recommend',
+      name: 'recommend',
+      component: () => import('@mobile/features/recommend/RecommendPage.vue'),
+      meta: { title: '每日推荐' },
+    },
+    {
+      path: '/ranking',
+      name: 'ranking',
+      component: () => import('@mobile/features/ranking/RankingPage.vue'),
+      meta: { title: '排行榜' },
+    },
+    {
+      path: '/rank/:id',
+      name: 'rank-detail',
+      component: () => import('@mobile/features/ranking/RankDetailPage.vue'),
+      meta: { title: '榜单' },
+    },
     {
       path: '/profile',
       name: 'profile',

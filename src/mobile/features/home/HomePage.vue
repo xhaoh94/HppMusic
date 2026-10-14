@@ -1,219 +1,345 @@
 <script setup lang="ts">
 /**
- * 发现（主页第一个子页签）。
+ * 发现（首页）。
  *
- * P0 范围：入口磁贴 + **真实数据的每日推荐列表**。
- * 这里刻意不等 P2 才接数据：每日推荐是唯一一条「登录 → 设备注册 → 加密请求 →
- * 解密响应 → 映射为 Song」的完整链路，把它跑通就等于端到端验证了桥、鉴权与打包产物；
- * 留到后面接，等于把最大的不确定性放到最后。
+ * 结构对齐参考产品的一屏：
  *
- * 播放暂未接线（P2 接 player store + 原生播放器），点歌给出明确提示而不是静默无反应。
+ * ```
+ * Hi, {昵称} 一起听歌吧        ← 问候语（未登录时只说"一起听歌吧"）
+ * 由此开启好心情 ~
+ *
+ * [14 每日推荐] [TOP 排行榜] [🎤 听歌识曲] [🔍 搜索]   ← 4 个竖排磁贴
+ *
+ * 推荐歌单                    [推荐] [Hi-Res]   ← 标题 + 来源切换
+ * [卡片] [卡片]
+ *
+ * 编辑精选
+ * [卡片] [卡片]
+ * ```
+ *
+ * ## 三处与桌面端不同的取舍
+ *
+ * 1. **磁贴是竖排的**（图标块在上、文字在下），不是桌面那种横排大卡片 ——
+ *    四张横排卡在 360px 屏上每个只有 80px 宽，副标题必然被压成竖排。
+ * 2. **每日推荐列表不在首页**，磁贴跳到独立页：参考产品首屏是"磁贴 + 歌单网格"，
+ *    把 30 首歌曲列表塞进来会让首屏长到看不到歌单。
+ * 3. **不做「风格推荐」**：参考产品的首屏没有这一块（旧项目桌面端有），
+ *    而且它带二级分类 + tag 多选，在手机上要再多两层交互才用得上。
+ *
+ * ## 数据来源
+ * · 推荐歌单：`getPlaylistByCategory(categoryId)`，分类 `0=推荐`、`11292=Hi-Res`
+ * · 编辑精选：`getTopIP()`，需过滤出 `type === 1` 且带 global id 的条目
+ *   （不滤的话会混进 IP 头像位等非歌单内容，点进去是空的）
  */
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import type { IconifyIcon } from '@iconify/types';
+import MediaCard from '@mobile/components/MediaCard.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
-import SongRow from '@mobile/components/SongRow.vue';
-import { useToastStore } from '@/stores/toast';
-import logger from '@/utils/logger';
-import { getEverydayRecommend } from '@/api/music';
+import { iconMicrophone, iconSearch, iconSparkles } from '@mobile/icons';
+import { useUserStore } from '@/stores/user';
+import { usePlayerStore } from '@/stores/player';
+import { getPlaylistByCategory, getTopIP } from '@/api/playlist';
 import { extractList } from '@/utils/extractors';
-import { mapTopSong } from '@/utils/mappers';
-import type { Song } from '@/models/song';
-import { iconAlbum, iconMusicOff, iconSearch } from '@mobile/icons';
-import { usePlaybackActions } from '@mobile/adapters/player';
+import { mapPlaylistMeta } from '@/utils/mappers';
+import logger from '@/utils/logger';
+import type { PlaylistMeta } from '@/models/playlist';
 
 const router = useRouter();
-const toast = useToastStore();
-const { playSong } = usePlaybackActions();
+const user = useUserStore();
+const player = usePlayerStore();
 
-type LoadState = 'loading' | 'ready' | 'error';
+/* ── 问候语 ── */
+const greeting = computed(() => {
+  const nickname = user.info?.nickname;
+  return user.isLoggedIn && nickname ? `Hi, ${nickname} 一起听歌吧` : '一起听歌吧';
+});
+/** 每日推荐磁贴上的日期数字（与参考产品一致：显示"今天几号"） */
+const todayLabel = computed(() => String(new Date().getDate()));
 
-const state = ref<LoadState>('loading');
-const songs = ref<Song[]>([]);
-const failureReason = ref('');
-
+/* ── 磁贴 ── */
 interface Tile {
   key: string;
-  title: string;
-  subtitle: string;
-  icon: IconifyIcon;
-  tone: string;
+  label: string;
+  /** 图标块里的内容：文字（14/TOP）或图标 */
+  text?: string;
+  icon?: IconifyIcon;
+  tone: 'green' | 'dark' | 'purple' | 'blue';
   available: boolean;
+  hint?: string;
 }
 
-const tiles: Tile[] = [
-  {
-    key: 'daily',
-    title: '每日推荐',
-    subtitle: '为你而选',
-    icon: iconAlbum,
-    tone: 'accent',
-    available: true,
-  },
-  {
-    key: 'search',
-    title: '搜索',
-    subtitle: '找歌、歌手、歌单',
-    icon: iconSearch,
-    tone: 'neutral',
-    available: true,
-  },
-  {
-    key: 'ranking',
-    title: '排行榜',
-    subtitle: '即将支持',
-    icon: iconAlbum,
-    tone: 'muted',
-    available: false,
-  },
+const tiles = computed<Tile[]>(() => [
+  { key: 'daily', label: '每日推荐', text: todayLabel.value, tone: 'green', available: true },
+  { key: 'ranking', label: '排行榜', text: 'TOP', tone: 'dark', available: true },
   {
     key: 'recognize',
-    title: '听歌识曲',
-    subtitle: '即将支持',
-    icon: iconMusicOff,
-    tone: 'muted',
+    label: '听歌识曲',
+    icon: iconMicrophone,
+    tone: 'purple',
     available: false,
+    hint: '即将支持',
   },
-];
-
-const scrollToDaily = () => {
-  document.getElementById('daily-recommend')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-};
+  { key: 'search', label: '搜索', icon: iconSearch, tone: 'blue', available: true },
+]);
 
 const onTile = (tile: Tile) => {
-  if (tile.key === 'search') {
-    void router.push({ name: 'search' });
-    return;
-  }
-  if (tile.key === 'daily') {
-    scrollToDaily();
-    return;
-  }
-  toast.info(`「${tile.title}」正在开发中`);
+  if (!tile.available) return;
+  if (tile.key === 'daily') void router.push({ name: 'recommend' });
+  else if (tile.key === 'ranking') void router.push({ name: 'ranking' });
+  else if (tile.key === 'search') void router.push({ name: 'search' });
 };
 
-const load = async () => {
-  state.value = 'loading';
-  failureReason.value = '';
+/* ── 推荐歌单 ── */
+const PLAYLIST_CATEGORIES = [
+  { id: '0', label: '推荐' },
+  { id: '11292', label: 'Hi-Res' },
+] as const;
+
+const activeCategoryId = ref<string>(PLAYLIST_CATEGORIES[0].id);
+const recommended = ref<PlaylistMeta[]>([]);
+const recommendState = ref<'loading' | 'ready' | 'error'>('loading');
+const recommendError = ref('');
+
+/** 本地正在播放的曲目在哪个歌单里 —— 用于给卡片打"当前播放"标记 */
+const activeQueueId = computed(() => String(player.currentSourceQueueId ?? ''));
+
+const loadRecommended = async () => {
+  const categoryId = activeCategoryId.value;
+  recommendState.value = 'loading';
+  recommendError.value = '';
   try {
-    const response = await getEverydayRecommend();
-    const mapped = (extractList(response) as unknown[]).map((item) => mapTopSong(item));
-    songs.value = mapped;
-    state.value = 'ready';
-    logger.info('Home', 'Daily recommend loaded:', mapped.length);
+    const response = await getPlaylistByCategory(categoryId, 0, 1);
+    // 期间用户切了分类就丢弃这次结果
+    if (categoryId !== activeCategoryId.value) return;
+    recommended.value = extractList(response).map((item) => mapPlaylistMeta(item));
+    recommendState.value = 'ready';
   } catch (error) {
-    logger.warn('Home', 'Daily recommend failed', error);
-    failureReason.value = error instanceof Error ? error.message : String(error);
-    state.value = 'error';
+    if (categoryId !== activeCategoryId.value) return;
+    logger.warn('Home', 'Load recommended playlists failed', error);
+    recommendError.value = error instanceof Error ? error.message : String(error);
+    recommendState.value = 'error';
+  }
+};
+
+/* ── 编辑精选 ── */
+const topIp = ref<PlaylistMeta[]>([]);
+const topIpState = ref<'loading' | 'ready' | 'error'>('loading');
+const topIpError = ref('');
+
+const loadTopIp = async () => {
+  topIpState.value = 'loading';
+  topIpError.value = '';
+  try {
+    const response = await getTopIP();
+    topIp.value = extractList(response)
+      .filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
+      // 只留真正的歌单：其它 type 是 IP 头像位之类的展示位，点进去没有曲目
+      .filter((item) => {
+        const extra = item.extra as Record<string, unknown> | undefined;
+        const globalId = extra?.global_collection_id ?? extra?.global_special_id;
+        return Number(item.type) === 1 && Boolean(globalId);
+      })
+      .map((item) => mapPlaylistMeta(item));
+    topIpState.value = 'ready';
+  } catch (error) {
+    logger.warn('Home', 'Load top ip failed', error);
+    topIpError.value = error instanceof Error ? error.message : String(error);
+    topIpState.value = 'error';
   }
 };
 
 /**
- * 点歌。
+ * 歌单卡片 → 路由 id。
  *
- * 整个每日推荐列表作为播放上下文传进去，而不是只播这一首 —— 否则播完就停了，
- * 用户得自己一首首点。队列 id 用固定的字符串（而不是每次生成），
- * 这样在首页重复点歌不会攒出一堆内容相同的队列。
+ * 用 `global_collection_id`（内核的 `getPlaylistDetail` / `getPlaylistTracks` 要的就是它），
+ * 数字 listid 那条件只在拿不到 global id 时兜底。顺序沿用上游：
+ * `listCreateGid || globalCollectionId || listCreateListid || id`。
  */
-const onSelect = async (song: Song) => {
-  const started = await playSong(song, songs.value, {
-    queueId: 'queue:mobile-daily',
-    title: '每日推荐',
-    subtitle: '',
-  });
-  if (!started) toast.warning('这首歌暂时无法播放，试试别的');
+const routeIdOf = (playlist: PlaylistMeta) =>
+  String(
+    playlist.listCreateGid ||
+      playlist.globalCollectionId ||
+      playlist.listCreateListid ||
+      playlist.id ||
+      '',
+  );
+
+const openPlaylist = (playlist: PlaylistMeta) => {
+  const id = routeIdOf(playlist);
+  if (!id) return;
+  void router.push({ name: 'playlist', params: { id } });
+};
+
+const subtitleOf = (playlist: PlaylistMeta) => {
+  const creator = playlist.nickname || '';
+  const count = playlist.count ?? playlist.songcount ?? 0;
+  if (creator && count) return `${creator} · ${count} 首`;
+  return creator || (count ? `${count} 首` : '');
+};
+
+const switchCategory = (id: string) => {
+  if (activeCategoryId.value === id) return;
+  activeCategoryId.value = id;
+  void loadRecommended();
 };
 
 onMounted(() => {
-  void load();
+  if (user.isLoggedIn) void user.fetchUserInfoOnce();
+  void loadRecommended();
+  void loadTopIp();
 });
+
+// 「Hi-Res」分类的结果和「推荐」差别很大，切回来时重新拉一次更稳
+watch(activeCategoryId, () => void loadRecommended());
 </script>
 
 <template>
   <div class="home-page scroll-y">
-    <section class="tiles">
+    <!-- 问候语 -->
+    <header class="greeting">
+      <h1 class="greeting-title">{{ greeting }}</h1>
+      <p class="greeting-sub">由此开启好心情～</p>
+    </header>
+
+    <!-- 功能磁贴：竖排（图标块在上、文字在下） -->
+    <nav class="tiles" aria-label="快捷入口">
       <button
         v-for="tile in tiles"
         :key="tile.key"
         type="button"
         class="tile"
-        :class="[`tone-${tile.tone}`, { 'is-muted': !tile.available }]"
+        :class="{ 'is-muted': !tile.available }"
+        :aria-label="tile.hint ? `${tile.label}（${tile.hint}）` : tile.label"
         @click="onTile(tile)"
       >
-        <span class="tile-icon">
-          <Icon :icon="tile.icon" width="18" height="18" />
+        <span class="tile-icon" :class="`tone-${tile.tone}`">
+          <span v-if="tile.text" class="tile-icon-text">{{ tile.text }}</span>
+          <Icon v-else-if="tile.icon" :icon="tile.icon" width="22" height="22" />
         </span>
-        <span class="tile-text">
-          <span class="tile-title">{{ tile.title }}</span>
-          <span class="tile-subtitle">{{ tile.subtitle }}</span>
-        </span>
+        <span class="tile-label">{{ tile.label }}</span>
       </button>
-    </section>
+    </nav>
 
-    <section id="daily-recommend" class="section">
+    <!-- 推荐歌单 -->
+    <section class="section">
       <header class="section-header">
-        <h2 class="section-title">每日推荐</h2>
-        <button type="button" class="section-action" @click="load">换一批</button>
+        <h2 class="section-title">推荐歌单</h2>
+        <div class="source-tabs" role="tablist" aria-label="推荐歌单分类">
+          <button
+            v-for="category in PLAYLIST_CATEGORIES"
+            :key="category.id"
+            type="button"
+            class="source-tab"
+            :class="{ 'is-active': activeCategoryId === category.id }"
+            role="tab"
+            :aria-selected="activeCategoryId === category.id"
+            @click="switchCategory(category.id)"
+          >
+            {{ category.label }}
+          </button>
+        </div>
       </header>
 
+      <EmptyState v-if="recommendState === 'loading'" tone="loading" title="正在加载歌单" />
       <EmptyState
-        v-if="state === 'loading'"
-        tone="loading"
-        title="正在加载"
-        description="正在获取今日推荐"
-      />
-      <EmptyState
-        v-else-if="state === 'error'"
+        v-else-if="recommendState === 'error'"
         tone="error"
-        title="加载失败"
-        :description="failureReason"
+        title="推荐歌单加载失败"
+        :description="recommendError"
         action-label="重试"
-        @action="load"
+        @action="loadRecommended"
       />
       <EmptyState
-        v-else-if="!songs.length"
-        title="今天还没有推荐"
-        description="稍后再试试，或者先搜索你想听的歌"
-        action-label="去搜索"
-        @action="router.push({ name: 'search' })"
+        v-else-if="!recommended.length"
+        title="暂时没有推荐歌单"
+        description="稍后再试试"
       />
-      <div v-else class="song-list">
-        <SongRow v-for="song in songs" :key="song.id || song.hash" :song="song" @select="onSelect" />
+      <div v-else class="grid">
+        <MediaCard
+          v-for="playlist in recommended"
+          :key="`rec-${playlist.id}`"
+          :cover="playlist.pic"
+          :title="playlist.name"
+          :subtitle="subtitleOf(playlist)"
+          @select="openPlaylist(playlist)"
+        />
       </div>
     </section>
+
+    <!-- 编辑精选 -->
+    <section class="section">
+      <header class="section-header">
+        <h2 class="section-title">编辑精选</h2>
+      </header>
+
+      <EmptyState v-if="topIpState === 'loading'" tone="loading" title="正在加载精选" />
+      <EmptyState
+        v-else-if="topIpState === 'error'"
+        tone="error"
+        title="编辑精选加载失败"
+        :description="topIpError"
+        action-label="重试"
+        @action="loadTopIp"
+      />
+      <div v-else class="grid">
+        <MediaCard
+          v-for="playlist in topIp"
+          :key="`ip-${playlist.id}`"
+          :cover="playlist.pic"
+          :title="playlist.name"
+          :subtitle="subtitleOf(playlist)"
+          @select="openPlaylist(playlist)"
+        />
+      </div>
+    </section>
+
+    <p class="footer-note">内容来自酷狗音乐，版权归原平台及版权方所有</p>
   </div>
 </template>
 
 <style scoped>
 .home-page {
   height: 100%;
+  padding-bottom: var(--sp-6);
 }
 
-/* ── 入口磁贴：两列，等宽 ── */
+/* ── 问候语 ── */
+.greeting {
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+}
+
+.greeting-title {
+  margin: 0 0 var(--sp-1);
+  font-size: var(--font-2xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.01em;
+}
+
+.greeting-sub {
+  margin: 0;
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+}
+
+/* ── 磁贴 ── */
 .tiles {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--sp-3);
-  padding: var(--sp-3) var(--sp-4) var(--sp-5);
+  grid-template-columns: repeat(4, 1fr);
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4) var(--sp-5);
 }
 
 .tile {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: var(--sp-3);
-  min-height: 64px;
-  padding: var(--sp-3);
-  border-radius: var(--radius-lg);
-  background: var(--bg-raised);
-  border: 1px solid var(--divider);
-  text-align: left;
-  transition: transform var(--duration-fast) var(--ease-standard);
+  gap: var(--sp-2);
 }
 
-.tile:active {
-  transform: scale(0.98);
+.tile:active .tile-icon {
+  transform: scale(0.94);
 }
 
 .tile.is-muted {
@@ -221,49 +347,56 @@ onMounted(() => {
 }
 
 .tile-icon {
-  flex: 0 0 34px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: var(--radius-sm);
-  background: var(--fill-muted);
-  color: var(--text-secondary);
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-lg);
+  color: #fff;
+  transition: transform var(--duration-fast) var(--ease-standard);
 }
 
-.tone-accent .tile-icon {
-  color: var(--accent);
-  background: var(--accent-soft);
+.tile-icon-text {
+  font-size: var(--font-xl);
+  font-weight: var(--weight-bold);
+  letter-spacing: -0.02em;
 }
 
-.tile-text {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
+/* 四张磁贴各用一个色相，与参考产品一致（绿/深灰/紫/蓝） */
+.tone-green {
+  background: linear-gradient(140deg, #34d399, #10b981);
 }
 
-.tile-title {
-  font-size: var(--font-md);
-  font-weight: var(--weight-semibold);
-  color: var(--text-primary);
+.tone-dark {
+  background: linear-gradient(140deg, #3f3f46, #27272a);
 }
 
-.tile-subtitle {
+.tone-purple {
+  background: linear-gradient(140deg, #a78bfa, #8b5cf6);
+}
+
+.tone-blue {
+  background: linear-gradient(140deg, #60a5fa, #3b82f6);
+}
+
+.tile-label {
   font-size: var(--font-xs);
-  color: var(--text-tertiary);
+  color: var(--text-secondary);
+  text-align: center;
 }
 
-/* ── 区块 ── */
+/* ── 分区 ── */
 .section {
-  padding-bottom: var(--sp-6);
+  padding: 0 var(--sp-4) var(--sp-5);
 }
 
 .section-header {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  padding: var(--sp-2) var(--sp-4);
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-3);
 }
 
 .section-title {
@@ -272,15 +405,37 @@ onMounted(() => {
   font-weight: var(--weight-bold);
 }
 
-.section-action {
-  min-height: 32px;
-  padding: 0 var(--sp-2);
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
+.source-tabs {
+  display: flex;
+  gap: var(--sp-1);
 }
 
-.song-list {
-  display: flex;
-  flex-direction: column;
+.source-tab {
+  min-height: 32px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.source-tab.is-active {
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.14);
+  font-weight: var(--weight-semibold);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: var(--sp-4) var(--sp-3);
+}
+
+.footer-note {
+  margin: var(--sp-4) 0 0;
+  padding: 0 var(--sp-4);
+  text-align: center;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
 }
 </style>
