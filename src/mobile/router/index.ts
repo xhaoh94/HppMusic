@@ -93,6 +93,12 @@ export const router = createRouter({
       meta: { title: '榜单' },
     },
     {
+      path: '/recognize',
+      name: 'recognize',
+      component: () => import('@mobile/features/recognize/RecognizePage.vue'),
+      meta: { title: '听歌识曲' },
+    },
+    {
       path: '/profile',
       name: 'profile',
       component: () => import('@mobile/features/profile/ProfilePage.vue'),

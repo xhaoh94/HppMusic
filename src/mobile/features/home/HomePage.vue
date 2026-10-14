@@ -73,14 +73,7 @@ interface Tile {
 const tiles = computed<Tile[]>(() => [
   { key: 'daily', label: '每日推荐', text: todayLabel.value, tone: 'green', available: true },
   { key: 'ranking', label: '排行榜', text: 'TOP', tone: 'dark', available: true },
-  {
-    key: 'recognize',
-    label: '听歌识曲',
-    icon: iconMicrophone,
-    tone: 'purple',
-    available: false,
-    hint: '即将支持',
-  },
+  { key: 'recognize', label: '听歌识曲', icon: iconMicrophone, tone: 'purple', available: true },
   { key: 'search', label: '搜索', icon: iconSearch, tone: 'blue', available: true },
 ]);
 
@@ -88,6 +81,7 @@ const onTile = (tile: Tile) => {
   if (!tile.available) return;
   if (tile.key === 'daily') void router.push({ name: 'recommend' });
   else if (tile.key === 'ranking') void router.push({ name: 'ranking' });
+  else if (tile.key === 'recognize') void router.push({ name: 'recognize' });
   else if (tile.key === 'search') void router.push({ name: 'search' });
 };
 

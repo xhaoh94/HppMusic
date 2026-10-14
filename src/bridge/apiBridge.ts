@@ -7,6 +7,7 @@
  * src/main/server.ts 的 handleApiRequest。
  */
 import './polyfills';
+import { Buffer } from 'buffer';
 import { mergeApiRequestBody } from '@shared/apiRequestMerge';
 import { modules, util } from '@/generated/kugou-api.js';
 import { getDeviceIdentity } from './deviceIdentity';
@@ -91,6 +92,34 @@ const matchModule = (url: string): ModuleFn | null => {
   if (exact) return exact;
   const trimmed = pathname.endsWith('/') ? pathname.slice(0, -1) : pathname;
   return moduleTable[trimmed] ?? null;
+};
+
+/**
+ * 把二进制请求体归一化成 **Buffer**。
+ *
+ * ⚠️ 这一步看着多余（Uint8Array 也是二进制），但对上游是**必需**的：
+ *
+ * 1. **签名**：`server/util/helper.js` 的 `signatureAndroidParams(params, data)`
+ *    对二进制有专门分支：
+ *    ```js
+ *    if (Buffer.isBuffer(data)) \{ 用原始字节参与 MD5 \}
+ *    return cryptoMd5(`${str}${paramsString}${data || ''}${str}`);
+ *    ```
+ *    传 `Uint8Array` 时 `Buffer.isBuffer` 为 false，会掉进字符串分支，
+ *    而 `request.js` 那行 `typeof data === 'object' ? JSON.stringify(data)`
+ *    会把字节数组变成 `{"0":7,"1":7,...}` —— **签出来完全是另一个值**，
+ *    上游直接以 `error_code: 40000` 拒绝。
+ * 2. **请求体**：`Buffer` 是 `Uint8Array` 的子类，
+ *    Capacitor 的 `convertBody` 才会把它当二进制转 base64 交给原生；
+ *    传裸 `Uint8Array` 时实测收到的字节数不对（32000 字节约变成 308891 字节）。
+ *
+ * 实测：听歌识曲（POST 320KB PCM 到 /audio/match）在转 Buffer 前一直是 40000。
+ */
+const toBinaryBody = (value: ArrayBuffer | ArrayBufferView): Buffer => {
+  if (Buffer.isBuffer(value)) return value;
+  if (value instanceof ArrayBuffer) return Buffer.from(value);
+  const view = value as ArrayBufferView;
+  return Buffer.from(view.buffer, view.byteOffset, view.byteLength);
 };
 
 const isBinary = (value: unknown): boolean =>
@@ -203,7 +232,8 @@ export const handleApiRequest = async (request: ApiRequest): Promise<ApiResponse
 
   if (request.data !== undefined && request.data !== null) {
     if (isBinary(request.data)) {
-      query.data = request.data;
+      // 必须转 Buffer：签名与请求体两处都依赖它（详见 toBinaryBody 的注释）
+      query.data = toBinaryBody(request.data as ArrayBuffer | ArrayBufferView);
     } else {
       query.body = request.data;
       if (typeof request.data === 'object' && !Array.isArray(request.data)) {

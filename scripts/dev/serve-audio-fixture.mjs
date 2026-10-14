@@ -80,6 +80,31 @@ const buildWav = () => {
 const wav = buildWav();
 
 const server = createServer((request, response) => {
+  if (request.url === '/health') {
+    response.writeHead(200, { 'Content-Type': 'text/plain' });
+    response.end('ok');
+    return;
+  }
+
+  /**
+   * POST 回显：返回实际收到的请求体字节数。
+   *
+   * 用来验证「原生 HTTP（CapacitorHttp）能不能正确传二进制请求体」——
+   * 听歌识曲需要 POST 320KB 的 PCM，而 JS bridge 的 JSON 序列化会吞掉二进制，
+   * 靠业务接口的报错反推很绕；这里直接看字节数最直接。
+   */
+  if (request.url?.startsWith('/echo') && request.method === 'POST') {
+    let bytes = 0;
+    request.on('data', (chunk) => {
+      bytes += chunk.length;
+    });
+    request.on('end', () => {
+      response.writeHead(200, { 'Content-Type': 'application/json' });
+      response.end(JSON.stringify({ bytes, contentType: request.headers['content-type'] ?? '' }));
+    });
+    return;
+  }
+
   if (request.url?.startsWith('/tone.wav')) {
     response.writeHead(200, {
       'Content-Type': 'audio/wav',
