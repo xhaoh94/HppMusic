@@ -35,6 +35,9 @@ import { usePlayerStore } from '@/stores/player';
 import { useToastStore } from '@/stores/toast';
 import logger from '@/utils/logger';
 
+/** 组件名：App.vue 的 KeepAlive `:include` 按这个名字匹配（对不上是静默失效，不会报错） */
+defineOptions({ name: 'ListenTogetherPage' });
+
 const router = useRouter();
 const room = useListenTogetherStore();
 const player = usePlayerStore();

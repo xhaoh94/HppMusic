@@ -29,6 +29,9 @@ import { mapPlaylistMeta } from '@/utils/mappers';
 import logger from '@/utils/logger';
 import type { PlaylistMeta } from '@/models/playlist';
 
+/** 组件名：App.vue 的 KeepAlive `:include` 按这个名字匹配（对不上是静默失效，不会报错） */
+defineOptions({ name: 'ExplorePage' });
+
 const router = useRouter();
 
 interface TagChild {

@@ -47,6 +47,9 @@ import { useUserStore } from '@/stores/user';
 import logger from '@/utils/logger';
 import type { Song } from '@/models/song';
 
+/** 组件名：App.vue 的 KeepAlive `:include` 按这个名字匹配（对不上是静默失效，不会报错） */
+defineOptions({ name: 'FreeListenPage' });
+
 const user = useUserStore();
 const { playSong, playList } = usePlaybackActions();
 
