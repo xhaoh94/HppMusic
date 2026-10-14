@@ -1,206 +1,342 @@
 <script setup lang="ts">
 /**
- * 「更多」面板：定时关闭 + 播放倍速。
+ * 「更多」面板。
+ *
+ * ## 版式对齐旧项目：一行一个功能
+ *
+ * 旧项目这个菜单是**单列列表**（图标 + 文字 + 齿轮），不是分区 + chips。我原来是
+ * 分区式，虽然少点一次，但和参考产品差得远。现在改成行列表：每行左侧图标、
+ * 中间标题、右侧当前值/箭头；需要选值的行（定时/倍速/换肤）**内联展开** chips，
+ * 不弹二级面板 —— 手机上少一层浮层更好用，"在哪里展开、展开的是什么"也更清楚。
  *
  * ## 定时关闭只有「暂停播放」一种动作
  *
- * 内核的 `sleepTimer.start(minutes, action)` 支持 `pause` / `quit` / `shutdown`，
- * 但后两个走的是 `window.electron.power.executeSleepTimerAction` —— 那是桌面主进程
- * 的能力（退出应用 / 关机），Android 桥没有实现，选了会直接弹
- * 「请重启 EchoMusic 后使用退出或关机动作」。所以这里只提供 `pause`：
- * 对手机来说"到点暂停"也正是唯一有意义的行为（定时关机该交给系统）。
+ * 内核 `sleepTimer.start(minutes, action)` 支持 `pause` / `quit` / `shutdown`，
+ * 后两个走 `window.electron.power.executeSleepTimerAction` —— 那是桌面主进程的能力
+ * （退出应用 / 关机），Android 桥没有实现，选了会提示「请重启 EchoMusic 后使用」。
+ * 所以这里只提供 `pause`：对手机来说"到点暂停"也正是唯一有意义的行为。
  */
 import { computed, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { Icon } from '@iconify/vue';
 import Sheet from '@mobile/components/Sheet.vue';
 import { usePlayerStore } from '@/stores/player';
 import { useToastStore } from '@/stores/toast';
+import { createSongShareTarget } from '@/utils/share';
+import { buildShareText } from '@shared/share';
+import { copyShareText, sendShareText } from '@bridge/shareApi';
+import logger from '@/utils/logger';
+import type { Song } from '@/models/song';
+import {
+  iconMoon,
+  iconPlaylistAdd,
+  iconShare,
+  iconShirt,
+  iconSlidersHorizontal,
+  iconSpeed,
+  iconVideo,
+} from '@mobile/icons';
+
+export type PlayerSkin = 'cover' | 'lyric' | 'portrait';
 
 const props = defineProps<{
   modelValue: boolean;
   /** 当前视图模式（与播放页共享同一份 settingStore.lyricViewMode） */
-  skin?: 'cover' | 'lyric' | 'portrait';
+  skin?: PlayerSkin;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
-  'update:skin': [value: 'cover' | 'lyric' | 'portrait'];
+  'update:skin': [value: PlayerSkin];
+  /** 音效面板由播放页承载（本组件不自己再开一层 Sheet，否则两层遮罩会叠） */
+  'open-effect': [];
+  'open-add-to-playlist': [];
 }>();
-
-/** 「换肤」可选项（对齐旧项目菜单里那一项的名字） */
-const SKIN_OPTIONS = [
-  { value: 'cover' as const, label: '封面' },
-  { value: 'lyric' as const, label: '简约歌词' },
-  { value: 'portrait' as const, label: '写真' },
-];
-
-const pickSkin = (value: 'cover' | 'lyric' | 'portrait') => {
-  emit('update:skin', value);
-  // 选完不关菜单：用户可能想连着试几种看效果
-};
 
 const player = usePlayerStore();
 const toast = useToastStore();
 const router = useRouter();
 
-/** MV 挂在歌曲下，用 albumAudioId 定位；没有它就没法查 MV */
-const albumAudioId = computed(() => String(player.currentTrackSnapshot?.albumAudioId ?? ''));
+const close = () => emit('update:modelValue', false);
 
-const openMv = () => {
-  if (!albumAudioId.value) {
-    toast.warning('当前曲目缺少 MV 标识，无法查找');
-    return;
-  }
-  emit('update:modelValue', false);
-  void router.push({ name: 'mv', params: { id: albumAudioId.value } });
+/** 当前展开的行（同时只能展开一行，避免面板被撑得过长） */
+const expanded = ref<'timer' | 'speed' | 'skin' | null>(null);
+const toggleExpand = (key: 'timer' | 'speed' | 'skin') => {
+  expanded.value = expanded.value === key ? null : key;
 };
 
+/* ── 定时暂停 ── */
 const TIMER_OPTIONS = [5, 15, 30, 60, 90];
-const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
-
-const selectingMinutes = ref<number | null>(null);
-
 const timerActive = computed(() => Boolean(player.sleepTimer?.deadline));
-const remainingText = computed(() => {
-  if (!timerActive.value) return '';
+const timerLabel = computed(() => {
+  if (!timerActive.value) return '未开启';
   const seconds = Math.max(0, Math.round(Number(player.sleepTimer?.remainingSeconds ?? 0)));
   const minutes = Math.floor(seconds / 60);
   return minutes > 0 ? `剩余 ${minutes} 分钟` : `剩余 ${seconds} 秒`;
 });
 
-const currentSpeed = computed(() => Number(player.playbackRate ?? 1));
-
 const startTimer = (minutes: number) => {
   // 动作固定 pause —— 理由见文件头
-  const started = player.startSleepTimer(minutes, 'pause');
-  if (!started) {
+  if (!player.startSleepTimer(minutes, 'pause')) {
     toast.danger('定时开启失败，请稍后重试');
     return;
   }
   toast.success(`${minutes} 分钟后暂停播放`);
-  selectingMinutes.value = minutes;
+  expanded.value = null;
 };
 
 const cancelTimer = () => {
   player.cancelSleepTimer();
-  selectingMinutes.value = null;
   toast.info('已取消定时暂停');
 };
+
+/* ── 倍速 ── */
+const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+const currentSpeed = computed(() => Number(player.playbackRate ?? 1));
+const speedLabel = computed(() => (currentSpeed.value === 1 ? '1×' : `${currentSpeed.value}×`));
 
 const setSpeed = (speed: number) => {
   player.setPlaybackRate(speed);
   toast.info(speed === 1 ? '已恢复原速' : `已切换到 ${speed}×`);
+  expanded.value = null;
+};
+
+/* ── 换肤 ── */
+const SKIN_OPTIONS: { value: PlayerSkin; label: string }[] = [
+  { value: 'cover', label: '封面' },
+  { value: 'lyric', label: '简约歌词' },
+  { value: 'portrait', label: '写真' },
+];
+const skinLabel = computed(
+  () => SKIN_OPTIONS.find((item) => item.value === props.skin)?.label ?? '封面',
+);
+const pickSkin = (value: PlayerSkin) => {
+  emit('update:skin', value);
+  // 选完不关菜单：用户可能想连着试几种看效果
+};
+
+/* ── 播放 MV ── */
+const albumAudioId = computed(() => String(player.currentTrackSnapshot?.albumAudioId ?? ''));
+const openMv = () => {
+  if (!albumAudioId.value) {
+    toast.warning('当前曲目缺少 MV 标识，无法查找');
+    return;
+  }
+  close();
+  void router.push({ name: 'mv', params: { id: albumAudioId.value } });
+};
+
+/* ── 分享 ── */
+/**
+ * 分享当前曲目。
+ *
+ * 优先走**原生分享面板**（`EchoShare.share`，Android 的 chooser），它比"复制链接"
+ * 更符合手机上的分享预期；原生不可用或用户取消时回落到复制链接 —— 旧项目只有复制
+ * 这一条路，移动端有原生能力就没必要退化。
+ *
+ * 文案用内核的 `buildShareText`（含曲名与 web 链接），但 `sharer` 覆盖成 HppMusic：
+ * 内核对未登录用户的默认值写的是桌面品牌名。
+ */
+const sharing = ref(false);
+const shareCurrent = async () => {
+  const song = player.currentTrackSnapshot as Song | null;
+  if (!song) {
+    toast.warning('还没有正在播放的歌曲');
+    return;
+  }
+  const target = createSongShareTarget(song);
+  if (!target) {
+    toast.warning('这首歌缺少分享标识，无法生成链接');
+    return;
+  }
+  const text = buildShareText({ ...target, sharer: 'HppMusic' });
+  sharing.value = true;
+  try {
+    if (await sendShareText(text)) {
+      close();
+      return;
+    }
+    // 原生面板没起来（例如系统里没有可接收的应用）→ 复制兜底，用户至少拿到链接
+    if (await copyShareText(text)) toast.success('分享链接已复制');
+    else toast.danger('分享失败，请稍后重试');
+  } catch (error) {
+    logger.warn('MoreSheet', 'Share failed', error);
+    toast.danger('分享失败，请稍后重试');
+  } finally {
+    sharing.value = false;
+  }
 };
 </script>
 
 <template>
   <Sheet
     :model-value="props.modelValue"
-    title="更多"
+    title="更多功能"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <section class="block">
-      <header class="block-head">
-        <h3 class="block-title">定时暂停</h3>
-        <span v-if="timerActive" class="block-status">{{ remainingText }}</span>
-      </header>
-      <div class="chips">
-        <button
-          v-for="minutes in TIMER_OPTIONS"
-          :key="minutes"
-          type="button"
-          class="chip"
-          :class="{ 'is-active': timerActive && player.sleepTimer?.durationMinutes === minutes }"
-          @click="startTimer(minutes)"
-        >
-          {{ minutes }} 分钟
-        </button>
-      </div>
-      <button v-if="timerActive" type="button" class="cancel" @click="cancelTimer">
-        取消定时
+    <div class="rows">
+      <!-- 音效 -->
+      <button type="button" class="row" @click="emit('open-effect')">
+        <Icon :icon="iconSlidersHorizontal" width="20" height="20" class="row-icon" />
+        <span class="row-label">音效</span>
+        <span class="row-chevron" aria-hidden="true">›</span>
       </button>
-    </section>
 
-    <section class="block">
-      <header class="block-head">
-        <h3 class="block-title">播放速度</h3>
-        <span v-if="currentSpeed !== 1" class="block-status">{{ currentSpeed }}×</span>
-      </header>
-      <div class="chips">
-        <button
-          v-for="speed in SPEED_OPTIONS"
-          :key="speed"
-          type="button"
-          class="chip"
-          :class="{ 'is-active': currentSpeed === speed }"
-          @click="setSpeed(speed)"
-        >
-          {{ speed }}×
-        </button>
-      </div>
-    </section>
-
-    <!-- 换肤：旧项目把视图模式放在这个菜单里（而不是播放页上的单独按钮） -->
-    <section class="block">
-      <header class="block-head">
-        <h3 class="block-title">换肤</h3>
-      </header>
-      <div class="chips">
-        <button
-          v-for="option in SKIN_OPTIONS"
-          :key="option.value"
-          type="button"
-          class="chip"
-          :class="{ 'is-active': props.skin === option.value }"
-          @click="pickSkin(option.value)"
-        >
-          {{ option.label }}
-        </button>
-      </div>
-    </section>
-
-    <!-- MV 入口：上游的 MV 挂在歌曲下（/kmr/audio/mv?album_audio_id=），
-         所以带上当前曲目的 albumAudioId，由 MV 页自己查有没有、再取地址 -->
-    <section class="block">
-      <header class="block-head">
-        <h3 class="block-title">视频</h3>
-      </header>
-      <button
-        type="button"
-        class="action-item"
-        :disabled="!albumAudioId"
-        @click="openMv"
-      >
-        <span class="action-label">查看 MV</span>
-        <span class="action-note">{{ albumAudioId ? '同一首歌的官方 MV' : '当前曲目没有 MV 标识' }}</span>
+      <!-- 定时暂停 -->
+      <button type="button" class="row" @click="toggleExpand('timer')">
+        <Icon :icon="iconMoon" width="20" height="20" class="row-icon" />
+        <span class="row-label">定时关闭</span>
+        <span class="row-value" :class="{ 'is-on': timerActive }">{{ timerLabel }}</span>
+        <span class="row-chevron" :class="{ 'is-open': expanded === 'timer' }" aria-hidden="true">›</span>
       </button>
-    </section>
+      <div v-if="expanded === 'timer'" class="expander">
+        <div class="chips">
+          <button
+            v-for="minutes in TIMER_OPTIONS"
+            :key="minutes"
+            type="button"
+            class="chip"
+            :class="{ 'is-active': timerActive && player.sleepTimer?.durationMinutes === minutes }"
+            @click="startTimer(minutes)"
+          >
+            {{ minutes }} 分钟
+          </button>
+        </div>
+        <button v-if="timerActive" type="button" class="expander-cancel" @click="cancelTimer">
+          取消定时
+        </button>
+      </div>
+
+      <!-- 倍速 -->
+      <button type="button" class="row" @click="toggleExpand('speed')">
+        <Icon :icon="iconSpeed" width="20" height="20" class="row-icon" />
+        <span class="row-label">倍速</span>
+        <span class="row-value">{{ speedLabel }}</span>
+        <span class="row-chevron" :class="{ 'is-open': expanded === 'speed' }" aria-hidden="true">›</span>
+      </button>
+      <div v-if="expanded === 'speed'" class="expander">
+        <div class="chips">
+          <button
+            v-for="speed in SPEED_OPTIONS"
+            :key="speed"
+            type="button"
+            class="chip"
+            :class="{ 'is-active': currentSpeed === speed }"
+            @click="setSpeed(speed)"
+          >
+            {{ speed }}×
+          </button>
+        </div>
+      </div>
+
+      <!-- 添加到歌单 -->
+      <button type="button" class="row" @click="emit('open-add-to-playlist')">
+        <Icon :icon="iconPlaylistAdd" width="20" height="20" class="row-icon" />
+        <span class="row-label">添加到</span>
+        <span class="row-chevron" aria-hidden="true">›</span>
+      </button>
+
+      <!-- 播放 MV -->
+      <button type="button" class="row" :disabled="!albumAudioId" @click="openMv">
+        <Icon :icon="iconVideo" width="20" height="20" class="row-icon" />
+        <span class="row-label">播放 MV</span>
+        <span class="row-chevron" aria-hidden="true">›</span>
+      </button>
+
+      <!-- 换肤 -->
+      <button type="button" class="row" @click="toggleExpand('skin')">
+        <Icon :icon="iconShirt" width="20" height="20" class="row-icon" />
+        <span class="row-label">换肤</span>
+        <span class="row-value">{{ skinLabel }}</span>
+        <span class="row-chevron" :class="{ 'is-open': expanded === 'skin' }" aria-hidden="true">›</span>
+      </button>
+      <div v-if="expanded === 'skin'" class="expander">
+        <div class="chips">
+          <button
+            v-for="option in SKIN_OPTIONS"
+            :key="option.value"
+            type="button"
+            class="chip"
+            :class="{ 'is-active': props.skin === option.value }"
+            @click="pickSkin(option.value)"
+          >
+            {{ option.label }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 分享 -->
+      <button type="button" class="row" :disabled="sharing" @click="shareCurrent">
+        <Icon :icon="iconShare" width="20" height="20" class="row-icon" />
+        <span class="row-label">分享</span>
+        <span class="row-chevron" aria-hidden="true">›</span>
+      </button>
+    </div>
   </Sheet>
 </template>
 
 <style scoped>
-.block + .block {
-  margin-top: var(--sp-5);
-  padding-top: var(--sp-4);
-  border-top: 1px solid var(--divider);
-}
-
-.block-head {
+.rows {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: var(--sp-3);
+  flex-direction: column;
 }
 
-.block-title {
-  margin: 0;
+.row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 52px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-sm);
+  text-align: left;
+}
+
+.row:active:not(:disabled) {
+  background: var(--fill-subtle);
+}
+
+.row:disabled {
+  opacity: 0.4;
+}
+
+.row-icon {
+  flex: 0 0 auto;
+  color: var(--text-secondary);
+}
+
+.row-label {
+  flex: 1;
+  min-width: 0;
   font-size: var(--font-md);
-  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
 }
 
-.block-status {
-  font-size: var(--font-xs);
+.row-value {
+  flex: 0 0 auto;
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+}
+
+.row-value.is-on {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
+}
+
+/* 展开指示：收起时朝右，展开时转 90° 朝下 */
+.row-chevron {
+  flex: 0 0 auto;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text-tertiary);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.row-chevron.is-open {
+  transform: rotate(90deg);
+}
+
+.expander {
+  padding: var(--sp-1) var(--sp-2) var(--sp-4) 40px;
 }
 
 .chips {
@@ -210,7 +346,7 @@ const setSpeed = (speed: number) => {
 }
 
 .chip {
-  min-height: 38px;
+  min-height: 36px;
   padding: 0 var(--sp-4);
   border-radius: var(--radius-pill);
   font-size: var(--font-sm);
@@ -226,42 +362,13 @@ const setSpeed = (speed: number) => {
   font-weight: var(--weight-semibold);
 }
 
-.cancel {
+.expander-cancel {
   width: 100%;
-  min-height: 44px;
-  margin-top: var(--sp-3);
+  min-height: 40px;
+  margin-top: var(--sp-2);
   border-radius: var(--radius-md);
-  font-size: var(--font-md);
+  font-size: var(--font-sm);
   color: var(--danger);
   background: var(--fill-subtle);
-}
-
-/* MV 入口行 */
-.action-item {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  width: 100%;
-  min-height: 52px;
-  padding: var(--sp-2) 0;
-  text-align: left;
-}
-
-.action-item:active:not(:disabled) {
-  background: var(--fill-subtle);
-}
-
-.action-item:disabled {
-  opacity: 0.45;
-}
-
-.action-label {
-  font-size: var(--font-md);
-  color: var(--text-primary);
-}
-
-.action-note {
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
 }
 </style>

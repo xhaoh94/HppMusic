@@ -41,7 +41,8 @@ import CoverPanel from './CoverPanel.vue';
 import LyricsPanel from './LyricsPanel.vue';
 import QualitySheet from './QualitySheet.vue';
 import EffectSheet from './EffectSheet.vue';
-import MoreSheet from './MoreSheet.vue';
+import MoreSheet, { type PlayerSkin } from './MoreSheet.vue';
+import AddToPlaylistSheet from './AddToPlaylistSheet.vue';
 import CommentSheet from './CommentSheet.vue';
 import {
   formatTime,
@@ -70,7 +71,6 @@ import {
   iconRepeat,
   iconRepeatOnce,
   iconShuffle,
-  iconSlidersHorizontal,
 } from '@mobile/icons';
 
 const router = useRouter();
@@ -100,9 +100,7 @@ const portrait = useArtistPortraits(track, {
   carouselInterval: computed(() => Number(setting.lyricCarouselInterval) || 15),
 });
 
-/* ── 视图模式（与 settingStore 同步，保证"更多 → 换肤"与这里一致） ── */
-
-export type PlayerSkin = 'cover' | 'lyric' | 'portrait';
+/* ── 视图模式（与 settingStore 同步，保证「更多 → 换肤」与这里一致） ── */
 
 const SKINS: { value: PlayerSkin; label: string; hint: string }[] = [
   { value: 'cover', label: '封面', hint: '封面大图 + 当前歌词' },
@@ -158,7 +156,20 @@ const queueOpen = ref(false);
 const qualityOpen = ref(false);
 const effectOpen = ref(false);
 const moreOpen = ref(false);
+const addToPlaylistOpen = ref(false);
 const commentOpen = ref(false);
+
+/**
+ * 「更多」里点开另一个面板时，先把「更多」收起再开下一个。
+ *
+ * 两个 `Sheet` 都 `Teleport to body` 且共用同一个 `--z-sheet` —— 同时挂载会两层
+ * 遮罩叠在一起（点关闭可能关错层）。所以等退场动画（`--duration-normal` = 200ms）
+ * 走完再开，220ms 留一点余量。
+ */
+const switchSheet = (open: (value: boolean) => void) => {
+  moreOpen.value = false;
+  window.setTimeout(() => open(true), 220);
+};
 
 const scrubbing = ref(false);
 const scrubValue = ref(0);
@@ -278,11 +289,8 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="player-bar">
-      <!-- ① 功能行 -->
+      <!-- ① 功能行（四项，对齐旧项目：音效已收进「更多」） -->
       <div class="func-row">
-        <button type="button" class="func-button" aria-label="音效" @click="effectOpen = true">
-          <Icon :icon="iconSlidersHorizontal" width="22" height="22" />
-        </button>
         <button type="button" class="func-button" aria-label="音质" @click="qualityOpen = true">
           <Icon :icon="iconAudioWave" width="22" height="22" />
         </button>
@@ -377,7 +385,14 @@ onBeforeUnmount(() => {
 
   <QualitySheet v-model="qualityOpen" />
   <EffectSheet v-model="effectOpen" />
-  <MoreSheet v-model="moreOpen" :skin="skin" @update:skin="setSkin" />
+  <MoreSheet
+    v-model="moreOpen"
+    :skin="skin"
+    @update:skin="setSkin"
+    @open-effect="switchSheet((open) => (effectOpen = open))"
+    @open-add-to-playlist="switchSheet((open) => (addToPlaylistOpen = open))"
+  />
+  <AddToPlaylistSheet v-model="addToPlaylistOpen" :song="track" />
   <CommentSheet v-model="commentOpen" />
 
   <Sheet v-model="queueOpen" :title="queueTitle">
