@@ -7,32 +7,21 @@
  * ⚠️ minSdk 是 24（低于 26），所以**不能只给自适应图标** ——
  * API 24/25 读的是 mipmap-<density>/ic_launcher.png，必须一并生成。
  *
- * ## 为什么是脚本而不是手改 15 张 PNG
+ * ## 设计来源
  *
- * 图标有 5 个密度 × 3 个变体，手改一次下次调色就得重来一遍。这里只维护
- * 一份 `108×108` 的坐标，其余全由它推导。
+ * 用户提供的 logo：深蓝色圆 + 镂空（负空间）的白色音符。原稿里还有
+ * "音乐"两个大字和一行 "MUSIC"，按用户要求只保留图形部分 —— 图标在桌面上
+ * 只有 48dp 上下，任何文字在那里都读不出来，应用名交给 launcher 显示。
  *
  * ## 三个变体的关系
  *
- * · `ic_launcher.png` / `ic_launcher_round.png` —— **完整图**（底色 + 音符），
+ * · `ic_launcher.png` / `ic_launcher_round.png` —— **完整图**（底色 + 图形），
  *   API 24/25 与不支持自适应的 launcher 用它；
- * · `ic_launcher_foreground.png` —— **透明底 + 音符**，26+ 的自适应图标把它
+ * · `ic_launcher_foreground.png` —— **透明底 + 图形**，26+ 的自适应图标把它
  *   和背景层合成，所以它自己绝不能带底色；
- * · 背景层 —— `drawable/ic_launcher_background.xml` 里的渐变，由 anydpi 的
- *   xml 引用。用 drawable 而不是 color，因为渐变没法塞进一个颜色值。
- *
- * ## 安全区 —— 这里有个容易踩的坑
- *
- * 自适应图标只显示中心 **72×72**，而且 launcher 会把这 72dp **放大**到图标实际尺寸。
- * 也就是说内容占 108 画布的 x%，到桌面上看到的是 x/72。
- *
- * 实测踩过：音符占了 108 画布的 63%，听起来还好，但用户看到的其实是
- * **94%** —— 几乎顶满、贴边，反馈"太大了"。正确做法是让内容占**安全区**的
- * 约 67%（= 108 画布的 45%）。
- *
- * 传统方形图标（API 24/25 用）没有这个放大效应，内容直接按画布的 ~70% 算，
- * 所以两边的 scale 不一样。看起来不一致才是对的。
+ * · 背景层 —— `@color/ic_launcher_background`，一个很浅的冷灰。
  */
+
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -41,83 +30,80 @@ import sharp from 'sharp';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const RES = path.join(ROOT, 'android/app/src/main/res');
 
+/** 品牌色（取自用户提供的 logo） */
+const INK = '#1C3B5D';
+const PAPER = '#F2F5F8';
+
 /**
- * 双八分音符（方案 C）。
+ * 圆 + 镂空音符，以 (54, 54) 为中心、圆半径 38。
  *
- * 两条来自实际返工的经验：
- * · **符头是斜的**（`rotate(-22)`）。音乐记谱里符头本来就带约 20° 倾角；
- *   画成水平椭圆会像"一根杆插了个球"，完全不像音符（前一版就是这么翻车的）。
- * · **符头是扁的**（rx 13 / ry 10）。做成正圆会变成两个球。符头**中心**比符干
- *   轴线左偏约一个 rx，让符头右沿刚好贴住符干。
+ * 音符是**白色画在圆上**而不是真的挖空：白色和浅色底同色，视觉上就是镂空效果，
+ * 但要简单可靠得多（真的挖空要走 mask，PNG 各密度的抗锯齿还会毛边）。
+ *
+ * 三个形状缺一不可（都对着原稿定过）：
+ * · **符头**是正圆，不是斜椭圆 —— 原稿就是图标化的正圆，比记谱写法更适合小尺寸；
+ * · **杆细**（9）且顶端 `y=16` 正好落在圆顶（54-38=16）上，把圆顶切开一个小口，
+ *   这是原稿的特征。杆**不能**粗到像胶囊、也**不能**用圆角冒出去
+ *   （用 rx 会把顶端做成圆弧，在透明前景层上会露到圆外）；
+ * · **符尾**是音符的辨识特征，去掉之后"圆头 + 竖杆"会读成感叹号或胶囊。
  */
+const disc = (r) => `<circle cx="54" cy="54" r="${r}" fill="${INK}"/>`;
+
+/** 镂空音符：符头 + 杆 + 符尾。符尾要**粗短**（约杆长的 1/3），拉长了会读成钩子 */
 const NOTE = `
     <g fill="#ffffff">
-      <rect x="41" y="22" width="9" height="56" rx="4.5"/>
-      <rect x="79" y="22" width="9" height="56" rx="4.5"/>
-      <rect x="41" y="22" width="47" height="11" rx="5.5"/>
-      <ellipse cx="32.5" cy="76" rx="13" ry="10" transform="rotate(-22 32.5 76)"/>
-      <ellipse cx="70.5" cy="76" rx="13" ry="10" transform="rotate(-22 70.5 76)"/>
-    </g>`;
+      <circle cx="45" cy="70" r="13"/>
+      <rect x="53" y="16" width="9" height="56" rx="4.5"/>
+    </g>
+    <path d="M62 18 q-13 2 -13 14" stroke="#ffffff" stroke-width="9" fill="none" stroke-linecap="round"/>`;
+
+/** 圆盘 + 音符，两者一起缩放（方形图标与自适应前景用） */
+const MARK = `${disc(38)}${NOTE}`;
 
 /**
- * 内容包围盒中心（实测像素得到：宽 68.1、高 64.5，中心在 53.8/54.15）。
- * 缩放要围绕它做，再把中心搬回画布中心，否则越缩越偏。
+ * 圆形图标：圆盘铺满画布，但**音符保持原大小**。
+ * 跟着圆一起放大的话，音符会占满整个圆 —— 看起来就只是"一个大音符"，
+ * 圆盘反而消失了。这里故意让两者的缩放不同。
  */
-const NOTE_CENTER = { x: 53.8, y: 54.15 };
+const ROUND_MARK = `${disc(54)}${NOTE}`;
 
-/** 把音符缩放到目标占比并对齐画布中心 */
-const noteGroup = (scale) =>
-  `<g transform="translate(54 54) scale(${scale}) translate(${-NOTE_CENTER.x} ${-NOTE_CENTER.y})">${NOTE}</g>`;
+/** 把整块图形缩放到目标占比，围绕圆心中缩放 —— 否则会越缩越偏 */
+const markGroup = (scale) =>
+  `<g transform="translate(54 54) scale(${scale}) translate(-54 -54)">${MARK}</g>`;
 
 /**
- * 传统方形图标：内容占画布约 70% —— 没有安全区放大，直接用画布比例。
- * 68.1 × 1.11 ≈ 75.6。
+ * 传统方形图标：图形按**画布**比例算，占约 70%（圆直径 76 / 108）。
+ * 形状本身已按 108 画布设计好，所以这里 scale = 1。
  */
-const LEGACY_SCALE = 1.11;
+const LEGACY_SCALE = 1;
 
 /**
- * 自适应前景：内容占**安全区**(72) 的约 67%，即 108 画布的约 45% → 48 宽。
- * 72 会显示成 100%，所以这个数才是桌面上真正看到的比例。
+ * 自适应前景：只显示中心 **72×72**，而且 launcher 会把这 72dp **放大**到
+ * 图标实际尺寸 —— 所以内容占 108 画布的 x%，到桌面上看到的是 x/72。
+ *
+ * 圆直径 76 → 0.84 × 76 = 64，占安全区的 89%。圆形主体本来就该几乎占满安全区，
+ * 留太多白会显得小气。
  */
-const FOREGROUND_SCALE = 0.7;
+const FOREGROUND_SCALE = 0.84;
 
-/** 品牌底色：青绿渐变，与图标里的白色音符对比足够强 */
-const BACKDROP_FROM = '#2af5c8';
-const BACKDROP_TO = '#00b894';
-/** 同样的渐变，但写成 SVG defs（PNG 用） */
-const backdropDefs = (id) => `
-    <defs>
-      <linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0" stop-color="${BACKDROP_FROM}"/>
-        <stop offset="1" stop-color="${BACKDROP_TO}"/>
-      </linearGradient>
-    </defs>`;
+const SHAPES = (body) =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">${body}</svg>`;
 
-/** 方形完整图标 */
+/** 方形完整图标：浅色纸底 + 图形 */
 const squareIcon = (scale = LEGACY_SCALE) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
-  ${backdropDefs('bg')}
-  <rect width="108" height="108" fill="url(#bg)"/>
-  ${noteGroup(scale)}
-</svg>`;
+  SHAPES(`<rect width="108" height="108" fill="${PAPER}"/>${markGroup(scale)}`);
 
-/** 圆形完整图标：底也是圆的，四角透明 */
-const roundIcon = (scale = LEGACY_SCALE) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
-  ${backdropDefs('bgr')}
+/** 圆形完整图标：圆形纸底，四角透明。图形放大到刚好铺满这个圆 */
+const roundIcon = () =>
+  SHAPES(`
   <defs><clipPath id="c"><circle cx="54" cy="54" r="54"/></clipPath></defs>
-  <circle cx="54" cy="54" r="54" fill="url(#bgr)"/>
-  <g clip-path="url(#c)">${noteGroup(scale)}</g>
-</svg>`;
+  <g clip-path="url(#c)">
+    <rect width="108" height="108" fill="${PAPER}"/>
+    ${ROUND_MARK}
+  </g>`);
 
-/**
- * 自适应图标前景：**透明底**，只放音符。
- * 缩放到安全区的 ~67%（见 FOREGROUND_SCALE），不要再放大 —— 那会被裁掉。
- */
-const foregroundIcon = (scale = FOREGROUND_SCALE) =>
-  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
-  ${noteGroup(scale)}
-</svg>`;
+/** 自适应图标前景：**透明底**，只有图形，缩放到安全区的约 89% */
+const foregroundIcon = (scale = FOREGROUND_SCALE) => SHAPES(markGroup(scale));
 
 /** density → 传统图标边长（dp 基准 48） */
 const LEGACY_SIZES = { mdpi: 48, hdpi: 72, xhdpi: 96, xxhdpi: 144, xxxhdpi: 192 };
@@ -142,49 +128,31 @@ for (const [density, size] of Object.entries(FOREGROUND_SIZES)) {
 }
 
 /**
- * 背景层用 **drawable 渐变**而不是 `@color`。
- *
- * 渐变塞不进一个颜色值；`<aapt:attr>` 是在 vector 里内联 gradient 的标准写法。
- * 注意 anydpi 的 xml 引用的是 `@drawable/ic_launcher_background`（不是 `@color`），
- * 所以原来那个 `values/ic_launcher_background.xml` 已经没人引用了，一并删掉。
+ * 背景用**纯色**就够了（logo 本身就是双色：深蓝 + 浅底），
+ * 所以回到 `@color`，不用上一版那套 `<aapt:attr>` 渐变。
  */
-const HEADER = `<?xml version="1.0" encoding="utf-8"?>
-<!-- 由 scripts/dev/gen-app-icon.mjs 生成，手改会被覆盖 -->
-`;
 writeFileSync(
-  path.join(RES, 'drawable/ic_launcher_background.xml'),
-  `${HEADER}<vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
-    android:width="108dp"
-    android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
-    <path android:pathData="M0,0h108v108h-108z">
-        <aapt:attr name="android:fillColor">
-            <gradient
-                android:type="linear"
-                android:startX="0"
-                android:startY="0"
-                android:endX="108"
-                android:endY="108">
-                <item android:offset="0" android:color="${BACKDROP_FROM.toUpperCase().replace('#', '#FF')}" />
-                <item android:offset="1" android:color="${BACKDROP_TO.toUpperCase().replace('#', '#FF')}" />
-            </gradient>
-        </aapt:attr>
-    </path>
-</vector>
+  path.join(RES, 'values/ic_launcher_background.xml'),
+  `<?xml version="1.0" encoding="utf-8"?>
+<!-- 由 scripts/dev/gen-app-icon.mjs 生成，手改会被覆盖 -->
+<resources>
+    <color name="ic_launcher_background">${PAPER}</color>
+</resources>
 `,
 );
 
+const HEADER = `<?xml version="1.0" encoding="utf-8"?>
+<!-- 由 scripts/dev/gen-app-icon.mjs 生成，手改会被覆盖 -->
+`;
 for (const name of ['ic_launcher', 'ic_launcher_round']) {
   writeFileSync(
     path.join(RES, `mipmap-anydpi-v26/${name}.xml`),
     `${HEADER}<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-    <background android:drawable="@drawable/ic_launcher_background"/>
+    <background android:drawable="@color/ic_launcher_background"/>
     <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
 </adaptive-icon>
 `,
   );
 }
 
-console.log('[app-icon] 已生成 15 张 PNG + 渐变背景 + 2 个 anydpi 描述');
+console.log('[app-icon] 已生成 15 张 PNG + 背景色 + 2 个 anydpi 描述');
