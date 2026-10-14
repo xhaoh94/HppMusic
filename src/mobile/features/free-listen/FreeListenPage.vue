@@ -32,23 +32,18 @@
  * 这个频道一次给几十首，滑动找歌很低效，所以页内放一个过滤框
  * （只是**本地过滤**，不触发搜索接口 —— 它是"在结果里找"，不是"搜全网"）。
  */
-import { computed, onActivated, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import SongRow from '@mobile/components/SongRow.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
 import { Icon } from '@iconify/vue';
 import { iconClose, iconRefresh, iconSearch } from '@mobile/icons';
 import { useNowPlaying, usePlaybackActions } from '@mobile/adapters/player';
-import { getFreeListenSongs } from '@/api/music';
-import { extractList } from '@/utils/extractors';
-import { mapTopSong } from '@/utils/mappers';
+import { FREE_LISTEN_QUEUE, fetchFreeListenSongs } from '@mobile/adapters/freeListen';
 import { filterSongsByQuery } from '@/utils/songList';
 import { captureUserSession } from '@/utils/userSession';
 import { useUserStore } from '@/stores/user';
-import {
-  autoPlayAndOpenOnEnter,
-  openPlayerOnSelect,
-} from '@mobile/composables/usePlaybackPrefs';
+import { openPlayerOnSelect } from '@mobile/composables/usePlaybackPrefs';
 import logger from '@/utils/logger';
 import type { Song } from '@/models/song';
 import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
@@ -62,7 +57,7 @@ const { isPlaying } = useNowPlaying();
 const { playSong, playList, activeQueue, remainingInQueue, appendToActiveQueue } =
   usePlaybackActions();
 
-const QUEUE_META = { queueId: 'queue:free-listen', title: '随便听', subtitle: '' };
+const QUEUE_META = FREE_LISTEN_QUEUE;
 
 const songs = ref<Song[]>([]);
 const loading = ref(true);
@@ -77,10 +72,9 @@ const songKey = (song: Song) => String(song.mixSongId || song.hash || song.id ||
 
 const displayedSongs = computed(() => filterSongsByQuery(songs.value, searchQuery.value));
 
-const collectSongs = (payload: unknown): Song[] => {
+const collectSongs = (list: Song[]): Song[] => {
   const batch: Song[] = [];
-  for (const item of extractList(payload)) {
-    const song = mapTopSong(item);
+  for (const song of list) {
     const key = songKey(song);
     if (!key || !song.id || seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -96,9 +90,9 @@ const load = async () => {
   loadError.value = '';
   seenKeys.clear();
   try {
-    const payload = await getFreeListenSongs();
+    const batch = await fetchFreeListenSongs();
     if (generation !== loadGeneration || !isSessionCurrent()) return;
-    songs.value = collectSongs(payload);
+    songs.value = collectSongs(batch);
   } catch (error) {
     if (generation !== loadGeneration || !isSessionCurrent()) return;
     logger.warn('FreeListen', 'Load failed', error);
@@ -164,9 +158,9 @@ const appendMore = async () => {
   prefetching = true;
   const isSessionCurrent = captureUserSession(user);
   try {
-    const payload = await getFreeListenSongs();
+    const batch = await fetchFreeListenSongs();
     if (!isSessionCurrent()) return;
-    const fresh = collectSongs(payload);
+    const fresh = collectSongs(batch);
     if (!fresh.length) return;
     songs.value = [...songs.value, ...fresh];
     appendToActiveQueue(fresh);
@@ -192,41 +186,13 @@ const playAll = async () => {
 };
 
 /**
- * 首批加载的 promise。
+ * 切页签时「自动播 + 进播放页」已经上移到**路由守卫**里做了（见 router/index.ts）：
+ * 在进入前改道，列表根本不会渲染，也就没有"先闪一下列表再跳"的延迟。
  *
- * `onActivated` 可能在**它完成之前**就触发 —— 冷启动直接落到本页时，
- * `onMounted` 里的 `load()` 还在路上，那时 `songs` 是空的。
- * 实测踩到：日志里 `{"pref":true,"playing":false,"songs":0}`，
- * 于是"自动播第一首"静默失效（拿不到第一首）。
+ * 这里**不能再做一次** —— 从播放页返回时「没在播」同样成立（用户可能刚暂停），
+ * 页面里再判一次就会把人又弹回去。
  */
-let firstLoad: Promise<void> | null = null;
-
-onMounted(() => {
-  firstLoad = load();
-});
-
-/**
- * 切入本页时的默认行为：自动播第一首 + 进全屏播放页。
- *
- * 用 `onActivated` 而不是 `onMounted`：本页走 KeepAlive，切回来时不会重新挂载。
- *
- * 三个"不动手"的条件：
- * · 设置里的「进入页面时自动播」关着（默认就是关的）→ 不擅自出声、也不跳；
- * · 已经在播 → 不打断用户正在听的（那很惊悚），也就不跳；
- * · 列表还没加载出来 → 先等首批加载完（否则拿不到第一首）。
- */
-onActivated(() => {
-  void (async () => {
-    if (!autoPlayAndOpenOnEnter.value) return;
-    if (isPlaying.value) return;
-    await firstLoad;
-    if (isPlaying.value) return;
-    const first = songs.value[0];
-    if (!first) return;
-    const started = await playSong(first, songs.value, QUEUE_META);
-    if (started) void router.push({ name: 'player' });
-  })();
-});
+onMounted(() => void load());
 </script>
 
 <template>

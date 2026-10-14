@@ -9,6 +9,10 @@
  * 冷启动不必为 20 个页面付解析代价（内核 + KuGou API 打包产物本身已 1.4MB）。
  */
 import { createRouter, createWebHashHistory } from 'vue-router';
+import {
+  autoPlayAndOpenOnEnter,
+} from '@mobile/composables/usePlaybackPrefs';
+import { ensureFreeListenPlaying } from '@mobile/adapters/freeListen';
 import { pinia } from '@mobile/store';
 
 /**
@@ -199,4 +203,31 @@ router.beforeEach(async (to) => {
   if (user.isLoggedIn) return true;
 
   return { name: 'login', replace: true };
+});
+
+/**
+ * 「进入随便听时自动播 + 进播放页」。
+ *
+ * ## 为什么放在守卫里，而不是页面里做
+ *
+ * 原来是在页面的 `onActivated` 里：先渲染列表 → 等 `load()` 回来 → 才播 + 跳。
+ * 用户看到的是**列表闪一下再跳走**。放在守卫里就能在进入前直接改道，
+ * 列表根本不渲染。
+ *
+ * ## 为什么从播放页返回时不再跳
+ *
+ * 返回时「没在播」这个条件同样成立（用户可能刚暂停），于是又被弹回播放页 ——
+ * 死活出不去。所以显式排除来源是播放页的情况：那时用户要的就是看列表。
+ *
+ * ⚠️ 注册在**登录守卫之后**：未登录时应该先去登录页，而不是被带去看播放页。
+ */
+router.beforeEach((to, from) => {
+  if (to.name !== 'free-listen') return true;
+  if (!autoPlayAndOpenOnEnter.value) return true;
+  // 从播放页返回 → 停在列表
+  if (from.name === 'player') return true;
+
+  // 不 await：等它回来才放行的话，又变成"（空白）等一会儿再跳"，等于把延迟搬到别处。
+  void ensureFreeListenPlaying();
+  return { name: 'player' };
 });
