@@ -56,6 +56,7 @@ import { useSettingStore } from '@/stores/setting';
 import { useToastStore } from '@/stores/toast';
 import logger from '@/utils/logger';
 import {
+  iconAudioWave,
   iconBack,
   iconFavorite,
   iconMessageCircle,
@@ -70,7 +71,6 @@ import {
   iconRepeatOnce,
   iconShuffle,
   iconSlidersHorizontal,
-  iconVolume,
 } from '@mobile/icons';
 
 const router = useRouter();
@@ -284,7 +284,7 @@ onBeforeUnmount(() => {
           <Icon :icon="iconSlidersHorizontal" width="22" height="22" />
         </button>
         <button type="button" class="func-button" aria-label="音质" @click="qualityOpen = true">
-          <Icon :icon="iconVolume" width="22" height="22" />
+          <Icon :icon="iconAudioWave" width="22" height="22" />
         </button>
         <button type="button" class="func-button" aria-label="评论" @click="commentOpen = true">
           <Icon :icon="iconMessageCircle" width="22" height="22" />
@@ -348,8 +348,8 @@ onBeforeUnmount(() => {
           :disabled="!hasTrack && !queueSongs.length"
           @click="togglePlay()"
         >
-          <Icon v-if="isLoading" :icon="iconPlay" width="26" height="26" class="pulse" />
-          <Icon v-else :icon="isPlaying ? iconPause : iconPlay" width="26" height="26" />
+          <Icon v-if="isLoading" :icon="iconPlay" width="34" height="34" class="pulse" />
+          <Icon v-else :icon="isPlaying ? iconPause : iconPlay" width="34" height="34" />
         </button>
 
         <button
@@ -717,24 +717,30 @@ onBeforeUnmount(() => {
 }
 
 .play-button {
-  flex: 0 0 64px;
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 64px;
-  height: 64px;
+  /* 无背景：用户明确要求，也跟相邻传输键同一种视觉语言
+     （旧项目全屏播放页的播放键是一层 5% 极淡底，视觉上几乎等同于没有背景） */
+  min-width: 60px;
+  min-height: 56px;
   border-radius: 50%;
-  color: var(--accent-on);
-  background: var(--accent);
+  color: var(--text-primary);
   transition: transform var(--duration-fast) var(--ease-standard);
 }
 
 .play-button:active:not(:disabled) {
-  transform: scale(0.94);
+  transform: scale(0.92);
+  background: var(--fill-subtle);
+}
+
+.is-portrait .play-button {
+  color: #fff;
 }
 
 .play-button:disabled {
-  opacity: 0.45;
+  opacity: 0.35;
 }
 
 .pulse {
