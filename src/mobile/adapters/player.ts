@@ -13,7 +13,7 @@
  * ⚠️ 本模块静态 import 内核 store，因此**必须动态加载**（见 src/mobile/main.ts
  * 的启动顺序说明）—— 实际上它只会被懒加载的页面引用，天然满足。
  */
-import { computed, ref } from 'vue';
+import { computed, ref, watch } from 'vue';
 import type { Song } from '@/models/song';
 import type { PlayMode } from '@shared/playback';
 import { usePlayerStore } from '@/stores/player';
@@ -381,11 +381,41 @@ export const useSmoothPosition = () => {
    ──────────────────────────────────────────────────────────── */
 
 /**
+ * 确保「当前曲目」的歌词已开始加载（幂等）。
+ *
+ * 内核对歌词的加载**只挂在播放链路上** —— `selectTrack` / `play` / `playQueue`
+ * 里才会调 `lyricStore.fetchLyrics`。于是冷启动恢复播放会话时，曲目已经躺在
+ * `currentTrackSnapshot` 里、播放页标题歌手都正常，但没有任何一次「播放」发生，
+ * 歌词就一直是「暂无歌词」。用户看到的现象是**必须点一下播放才有歌词**。
+ *
+ * 判据只用 `loadedHash !== hash`：`loadedHash` 是内核「这首歌我已经处理过」的标记
+ * （加载成功、加载中、以及确认没歌词都会写上），所以这里不会对同一首歌反复请求。
+ * `fetchLyrics` 自己还有两道闸（已有歌词直接返回、同名在途去重），双保险。
+ */
+export const ensureLyricsLoaded = () => {
+  const player = usePlayerStore();
+  const lyric = useLyricStore();
+
+  const track = player.currentTrackSnapshot as Song | null;
+  if (!track) return;
+
+  const hash = String(track.hash ?? track.id ?? '').trim();
+  if (!hash) return;
+  // 内核已经处理过这首（成功 / 进行中 / 确认无词）—— 不要再插手
+  if (lyric.loadedHash === hash || lyric.isLoading) return;
+
+  void lyric.fetchLyrics(hash, {
+    duration: track.duration ? track.duration * 1000 : 0,
+    track,
+  });
+};
+
+/**
  * 歌词视图数据。
  *
- * **不需要自己拉歌词** —— 内核的 player store 在切歌时会调
- * `lyricStore.fetchLyrics(hash, ...)`，并且用播放时钟驱动
- * `updateCurrentIndex()`。这里只负责读。
+ * 内核的 player store 在切歌时会调 `lyricStore.fetchLyrics(hash, ...)`，并且用
+ * 播放时钟驱动 `updateCurrentIndex()` —— 但那只覆盖了「播放过」的路径。
+ * 本函数在挂载/切歌时补一次 `ensureLyricsLoaded()`，让**没播放也能看到歌词**。
  *
  * ⚠️ 渲染用 `displayLines` 而不是 `lines`：前者已经过用户配置的
  * 正则过滤与简繁转换，且与 `currentIndex` 索引对齐。
@@ -393,6 +423,19 @@ export const useSmoothPosition = () => {
 export const useLyrics = () => {
   const lyric = useLyricStore();
   const setting = useSettingStore();
+  const player = usePlayerStore();
+
+  /**
+   * 当前曲目的歌词键（与内核取 hash 的规则一致）。
+   * 单独拎出来是为了给下面的 watch 一个稳定字段，避免整对象比较导致的重复触发。
+   */
+  const currentHash = computed(() => {
+    const track = player.currentTrackSnapshot as Song | null;
+    return track ? String(track.hash ?? track.id ?? '').trim() : '';
+  });
+
+  // 一挂载就补一次：恢复会话后用户直接打开播放页也能看到歌词
+  watch(currentHash, () => ensureLyricsLoaded(), { immediate: true });
 
   const filterConfig = computed(() => ({
     enabled: Boolean(setting.lyricFilterEnabled),

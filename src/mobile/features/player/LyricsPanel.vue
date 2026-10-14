@@ -18,6 +18,11 @@
  *    父级用 `useSmoothPosition()` 做了帧级外推；两处各自读 store 会出现
  *    "进度条已经走了、歌词还没切行"的不一致。
  *
+ * 4. **没播放也要有歌词**。
+ *    数据侧由 `useLyrics()` 里的 `ensureLyricsLoaded()` 保证（内核只在播放链路
+ *    里拉歌词）；视觉侧由 `visualIndex` 保证 —— 未播放时 `currentIndex` 是 -1，
+ *    若直接用它，整屏歌词全是暗的，用户会以为没加载出来。
+ *
  * 渲染用 `displayLines`（已过用户配置的过滤/简繁转换，且与 currentIndex 对齐）。
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
@@ -47,6 +52,20 @@ const {
 const scroller = ref<HTMLElement | null>(null);
 const lineElements = ref<(HTMLElement | null)[]>([]);
 
+/**
+ * 视觉当前行（高亮 + 居中用）。
+ *
+ * 未播放时 `currentIndex` 是 -1（刚打开播放页、暂停后停在开头、或整首放完），
+ * 直接用它会让整屏歌词全暗——用户看到的是「一堆灰字」，以为是没加载出来。
+ * 所以退回第 0 行：既保留歌词可见性，也暗示「将从这句开始」。
+ *
+ * 点击跳转仍然用真实行下标（`seekToLine` 不受影响）。
+ */
+const visualIndex = computed(() => {
+  if (currentIndex.value >= 0) return currentIndex.value;
+  return lines.value.length ? 0 : -1;
+});
+
 /** 用户操作后暂停自动滚动到这个时间点 */
 const USER_SCROLL_PAUSE_MS = 3500;
 const userScrollUntil = ref(0);
@@ -69,6 +88,8 @@ const positionSec = computed(() => props.positionMs / 1000);
  * 这样每帧只重算一个整数，配合下面的 `v-for` 就能让 Vue 只改动变化的那一两个 class。
  */
 const activeCharCount = computed(() => {
+  // 没在播放（或还没开始）时不做逐字高亮：整行走普通文本，视觉上更安静
+  if (currentIndex.value < 0) return -1;
   const line: LyricLine | undefined = lines.value[currentIndex.value];
   if (!line?.characters?.length) return -1;
   let count = 0;
@@ -81,7 +102,7 @@ const activeCharCount = computed(() => {
 
 const centerCurrentLine = (behavior: ScrollBehavior = 'smooth') => {
   const container = scroller.value;
-  const element = lineElements.value[currentIndex.value];
+  const element = lineElements.value[visualIndex.value];
   if (!container || !element) return;
   const target =
     element.offsetTop - container.clientHeight / 2 + element.clientHeight / 2;
@@ -89,7 +110,7 @@ const centerCurrentLine = (behavior: ScrollBehavior = 'smooth') => {
 };
 
 watch(
-  () => currentIndex.value,
+  () => visualIndex.value,
   async () => {
     if (!props.active || autoScrollPaused.value) return;
     // 等 DOM 更新完再量 offsetTop：行高会随字号/译文行数变化
@@ -160,8 +181,8 @@ const lineText = (line: LyricLine) => line.text || '♪';
         :ref="(element) => setLineRef(element as Element | null, index)"
         class="line"
         :class="{
-          'is-active': index === currentIndex,
-          'is-near': Math.abs(index - currentIndex) === 1,
+          'is-active': index === visualIndex,
+          'is-near': Math.abs(index - visualIndex) === 1,
         }"
         role="button"
         tabindex="0"
@@ -169,7 +190,7 @@ const lineText = (line: LyricLine) => line.text || '♪';
         @keyup.enter="seekToLine(index)"
       >
         <!-- 当前行逐字高亮；其余行整行文本 -->
-        <span v-if="index === currentIndex && activeCharCount >= 0" class="line-text">
+        <span v-if="index === visualIndex && activeCharCount >= 0" class="line-text">
           <span
             v-for="(character, charIndex) in line.characters"
             :key="charIndex"
