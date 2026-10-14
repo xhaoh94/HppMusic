@@ -29,6 +29,7 @@
  */
 import type { IconifyIcon } from '@iconify/types';
 
+import * as tablerAdjustmentsHorizontal from '@iconify/icons-tabler/adjustments-horizontal';
 import * as tablerAlertCircle from '@iconify/icons-tabler/alert-circle';
 import * as tablerAlertTriangle from '@iconify/icons-tabler/alert-triangle';
 import * as tablerArrowLeft from '@iconify/icons-tabler/arrow-left';
@@ -98,6 +99,7 @@ const unwrapIcon = (module: unknown, label: string): IconifyIcon => {
 
 const icon = (module: unknown, label: string) => unwrapIcon(module, label);
 
+export const adjustmentsHorizontal = icon(tablerAdjustmentsHorizontal, 'adjustments-horizontal');
 export const alertCircle = icon(tablerAlertCircle, 'alert-circle');
 export const alertTriangle = icon(tablerAlertTriangle, 'alert-triangle');
 export const arrowLeft = icon(tablerArrowLeft, 'arrow-left');
@@ -181,3 +183,5 @@ export const iconQrCode = qrcode;
 export const iconBrandQq = brandQq;
 export const iconBrandWechat = brandWechat;
 export const iconLock = lock;
+/** 音效（滑杆）：与参考产品功能行第一个图标一致 */
+export const iconSlidersHorizontal = adjustmentsHorizontal;

@@ -190,6 +190,39 @@ export const usePlaybackActions = () => {
 
   const activeQueue = computed(() => playlist.activeQueue);
 
+  /* ────────────────────────────────────────────────────────
+     收藏
+     ──────────────────────────────────────────────────────── */
+
+  /** 当前曲目是否已收藏（响应式） */
+  const isCurrentFavorite = computed(() => {
+    const song = player.currentTrackSnapshot as Song | null;
+    if (!song) return false;
+    return playlist.isFavoriteSong(song);
+  });
+
+  /**
+   * 切换收藏状态。
+   *
+   * 必须走 `ensureLikedPlaylistReady()` 拿 listId：「我喜欢」是一个**服务端歌单**，
+   * 收藏 = 往那个歌单里加歌，光有歌曲对象不够（该动作内部会按需拉用户歌单）。
+   *
+   * 返回值表示切换后的状态（true=现在已收藏），让调用方能直接推进 UI。
+   */
+  const toggleFavorite = async (song: Song): Promise<boolean> => {
+    const { listId } = await playlist.ensureLikedPlaylistReady();
+    if (!listId) throw new Error('未找到「我喜欢」歌单，请稍后重试');
+
+    if (playlist.isFavoriteSong(song)) {
+      await playlist.removeFromPlaylist(listId, song);
+      return false;
+    }
+    const result = await playlist.addToPlaylist(listId, song);
+    if (result === 'failed') throw new Error('收藏失败，请稍后重试');
+    // 'exists' 也算已收藏（服务端已经有一份，正常场景下不会走到）
+    return true;
+  };
+
   /**
    * 从当前队列里跳播某一首（队列面板点击用）。
    * 显式传 `sourceQueueId`：内核靠它区分"同一个 id 出现在多个队列里"的情况，
@@ -215,6 +248,8 @@ export const usePlaybackActions = () => {
     activeQueue,
     playFromActiveQueue,
     manualQueueMeta,
+    isCurrentFavorite,
+    toggleFavorite,
   };
 };
 
