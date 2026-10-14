@@ -222,12 +222,11 @@ onMounted(() => {
           <Icon :icon="iconDiamond" width="18" height="18" class="membership-icon" />
           <div class="membership-copy">
             <h4 class="membership-label">{{ item.label }}</h4>
-            <!-- 已开通：具体到期时间为主、相对时间为辅；未开通就一行 -->
-            <template v-if="item.active">
-              <p class="membership-expiry">{{ item.expiresAt || '已开通' }}</p>
-              <p v-if="item.expiry" class="membership-relative">{{ item.expiry }}</p>
-            </template>
-            <p v-else class="membership-expiry is-inactive">未开通</p>
+            <!-- 已开通：只给到期日期（横向空间有限，时分会把两列挤到换行）；未开通一行 -->
+            <p
+              class="membership-expiry"
+              :class="{ 'is-inactive': !item.active }"
+            >{{ item.active ? item.expiresAt || '已开通' : '未开通' }}</p>
           </div>
         </article>
       </div>
@@ -485,13 +484,6 @@ onMounted(() => {
 }
 
 .membership-expiry.is-inactive {
-  color: var(--text-tertiary);
-}
-
-/* 相对时间退到第三行的小字：具体日期才是主信息 */
-.membership-relative {
-  margin: 1px 0 0;
-  font-size: var(--font-xs);
   color: var(--text-tertiary);
 }
 

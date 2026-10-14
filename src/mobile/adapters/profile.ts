@@ -39,10 +39,8 @@ export interface MembershipCard {
   key: MembershipKind;
   label: string;
   kind: MembershipKind;
-  /** 具体到期时间（`2026-11-26 13:55`）；未开通是空串 */
+  /** 到期日期（`2026-11-26`）；未开通是空串 */
   expiresAt: string;
-  /** 相对到期文案（`1个月后到期`）；未开通是空串 */
-  expiry: string;
   active: boolean;
 }
 
@@ -91,39 +89,16 @@ const count = (source: Record<string, unknown>, keys: string[]): number => {
 };
 
 /**
- * 到期文案。
+ * 到期日期（`2026-11-26`）。
  *
- * 旧项目 `Profile.vue` 里的局部函数（内核没有）- 逐档判断：年 / 月 / 天 / 小时 / 分钟。
- * `vip_end_time` 是 `"2026-11-26 13:55:46"` 这种可被 `new Date()` 解析的字符串。
- */
-export const formatVipExpiry = (endTime: unknown, now = new Date()): string => {
-  const value = text(endTime);
-  if (!value) return '';
-  const expire = new Date(value);
-  if (!Number.isFinite(expire.getTime())) return '';
-  const diff = expire.getTime() - now.getTime();
-  if (diff < 0) return '已过期';
-
-  const minutes = Math.floor(diff / 60000);
-  const hours = Math.floor(diff / 3600000);
-  const days = Math.floor(diff / 86400000);
-  if (days > 365) return `${Math.floor(days / 365)}年后到期`;
-  if (days > 30) return `${Math.floor(days / 30)}个月后到期`;
-  if (days > 0) return `${days}天后到期`;
-  if (hours > 0) return `${hours}小时后到期`;
-  if (minutes > 0) return `${minutes}分钟后到期`;
-  return '即将到期';
-};
-
-/**
- * 具体到期时间（`2026-11-26 13:55`）。
+ * 只要年月日：会员卡的横向空间有限，带上时分（`13:55`）会把两列挤到换行，
+ * 而“哪天到期”才是要看的信息。
  *
- * 手动拼而不是 `toLocaleString()`：Android WebView 的 `toLocaleString` 输出随系统语言
- * 变（`2026/11/26 下午1:55` 之类），同一屏里两张卡片的格式还可能不一致。
+ * 手动拼而不是 `toLocaleString()`：Android WebView 的输出随系统语言变
+ * （`2026/11/26 下午1:55` 之类），同一屏里两张卡片的格式还可能不一致。
  *
  * 上游给的 `vip_end_time` 是 `"2026-11-26 13:55:46"`，**不是** ISO 格式（缺 T），
- * 但 `new Date()` 在各引擎上都能按本地时间解析 —— 上一层的相对文案也是这么算的，
- * 实测能正常得出"1个月后到期"。解不开就原样展示，不隐藏信息。
+ * 但 `new Date()` 在各引擎上都能按本地时间解析。解不开就原样带出去，不隐藏信息。
  */
 export const formatVipDate = (endTime: unknown): string => {
   const value = text(endTime);
@@ -131,7 +106,7 @@ export const formatVipDate = (endTime: unknown): string => {
   const date = new Date(value);
   if (!Number.isFinite(date.getTime())) return value;
   const pad = (part: number) => String(part).padStart(2, '0');
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 };
 
 /**
@@ -143,7 +118,6 @@ export const formatVipDate = (endTime: unknown): string => {
  */
 const buildMemberships = (
   vip: Record<string, unknown>,
-  now: Date,
 ): MembershipCard[] => {
   const status = getAccountVipStatus(vip);
   /** 四种会员的到期时间**字段各不相同**，不能统一读一个 */
@@ -157,7 +131,6 @@ const buildMemberships = (
     label,
     kind: key,
     expiresAt: active ? formatVipDate(endTime) : '',
-    expiry: active ? formatVipExpiry(endTime, now) : '',
     active,
   });
 
@@ -179,7 +152,6 @@ export const useProfileSummary = (): ComputedRef<ProfileSummary> => {
     const detail = asRecord(info?.detail);
     const vip = asRecord(info?.vip);
     const display = getAccountDisplay(info);
-    const now = new Date();
 
     const province = text(detail.province);
     const city = text(detail.city);
@@ -205,7 +177,7 @@ export const useProfileSummary = (): ComputedRef<ProfileSummary> => {
       accountAge: formatAccountAge(detail.rtime),
       location: province && city ? `${province}·${city}` : province || city || '—',
       listening: info ? formatListeningDuration(detail.d_sec, detail.duration) : '—',
-      memberships: buildMemberships(vip, now),
+      memberships: buildMemberships(vip),
       hasDetail: Object.keys(detail).length > 0,
     };
   });
