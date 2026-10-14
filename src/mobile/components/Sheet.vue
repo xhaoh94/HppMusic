@@ -17,8 +17,17 @@ const props = withDefaults(
     title?: string;
     /** 点遮罩是否关闭（操作确认类抽屉建议改成 false，避免误触丢失输入） */
     dismissOnMask?: boolean;
+    /**
+     * 提到 `--z-dialog` 层。
+     *
+     * 用于「必须先处理完才能继续」的浮层（典型是风控验证）。它们由 App 根挂载，
+     * 而页面自己也可能开着 Sheet（如创建众乐房的表单），两者同为 `--z-sheet`，
+     * 这时**DOM 靠后的页面层会把全局浮层盖住** —— 实测踩到：选公开房间触发实名验证，
+     * 验证弹窗被创建表单压住，看不见也点不到。
+     */
+    elevated?: boolean;
   }>(),
-  { title: '', dismissOnMask: true },
+  { title: '', dismissOnMask: true, elevated: false },
 );
 
 const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
@@ -59,7 +68,12 @@ onBeforeUnmount(() => offBack?.());
 <template>
   <Teleport to="body">
     <Transition name="sheet">
-      <div v-if="modelValue" class="sheet-mask" @click.self="dismissOnMask && close()">
+      <div
+        v-if="modelValue"
+        class="sheet-mask"
+        :class="{ 'is-elevated': elevated }"
+        @click.self="dismissOnMask && close()"
+      >
         <div class="sheet-panel" role="dialog" :aria-label="title || undefined">
           <span class="sheet-handle" aria-hidden="true" />
           <header v-if="title || $slots.header" class="sheet-header">
@@ -87,6 +101,11 @@ onBeforeUnmount(() => offBack?.());
   display: flex;
   align-items: flex-end;
   background: rgba(0, 0, 0, 0.5);
+}
+
+/* 全局阻断型浮层：必须盖过页面自己开的 Sheet */
+.sheet-mask.is-elevated {
+  z-index: var(--z-dialog);
 }
 
 .sheet-panel {

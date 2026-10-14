@@ -117,22 +117,34 @@ const leave = async () => {
 /**
  * 房主当前播放位置。
  *
- * 服务端建房间时**必需**这个字段** —— 缺了直接返回 `20003`
- * （内核会把它翻成"房间频道或歌曲配置不完整"，看不出到底缺什么）。
- * 字段名与取值照搬参考产品的 `musicRoomProgressInfo`：`pause` 用 1/2 而不是布尔，
- * `play_mode` 是字符串 `'1'|'2'|'3'`（列表/单曲/随机）。
+ * ⚠️ **服务端必需且不能为空** —— 缺了直接报 `params.progress_info is empty`（实测）。
+ *
+ * 不能只认 `currentTrackSnapshot`：冷启动时队列已经恢复了 30 首，但"当前曲目"
+ * 要等用户真的点播才有。之前那样写会返回 undefined，于是**看上去是"私密房间建不了"**，
+ * 实际跟房间权限毫无关系。所以当前曲目缺 hash / albumAudioId 时退回**队列第一首**
+ * （正是房间将要同步播放的那首），进度记 0。
+ *
+ * 字段名与取值照搬参考产品的 `musicRoomProgressInfo`：
+ * `pause` 用 1/2 而不是布尔，`play_mode` 是字符串 `'1'|'2'|'3'`（列表/单曲/随机）。
  */
 const currentProgressInfo = (): ListenTogetherMusicProgressInfo | undefined => {
-  const current = player.currentTrackSnapshot;
-  if (!current?.hash) return undefined;
-  const albumAudioId = String(current.mixSongId ?? current.albumAudioId ?? '');
-  if (!albumAudioId) return undefined;
+  /** 只有 hash 与 albumAudioId 都齐才能用：服务端两个都要 */
+  const usable = (song: Song | null | undefined) => {
+    const hash = String(song?.hash ?? '').trim();
+    const albumAudioId = String(song?.mixSongId ?? song?.albumAudioId ?? '').trim();
+    return hash && albumAudioId ? { hash, albumAudioId } : null;
+  };
+
+  const fromTrack = usable(player.currentTrackSnapshot as Song | null);
+  const source = fromTrack ?? usable((player.currentPlaylist ?? [])[0]);
+  if (!source) return undefined;
+
+  const playing = Boolean(fromTrack) && player.isPlaying;
   return {
-    hash: current.hash,
-    album_audio_id: albumAudioId,
-    progress: Math.max(0, Math.floor(player.currentTime || 0)),
-    // pause 用 1/2 而不是布尔；play_mode 是字符串 '1'|'2'|'3'（列表/单曲/随机）
-    pause: player.isPlaying ? 1 : 2,
+    hash: source.hash,
+    album_audio_id: source.albumAudioId,
+    progress: playing ? Math.max(0, Math.floor(player.currentTime || 0)) : 0,
+    pause: playing ? 1 : 2,
     play_mode: player.playMode === 'single' ? '2' : player.playMode === 'random' ? '3' : '1',
   };
 };
@@ -164,7 +176,9 @@ const openCreate = () => {
     toast.warning('先在首页放首歌，再用当前队列开房间');
     return;
   }
-  createName.value = `${player.currentTrackSnapshot?.title ?? '一起听'} 的房间`;
+  // 房间名同样不能只认当前曲目：未点播时用队列第一首的名字（实测冷启动会拿到 undefined）
+  const seed = (player.currentTrackSnapshot as Song | null) ?? (player.currentPlaylist ?? [])[0];
+  createName.value = `${seed?.title || seed?.name || '一起听'} 的房间`;
   // 默认私密 —— 公开需要账号具备公开创房权限，选了可能直接被验证拦住
   createPrivacy.value = 2;
   createOpen.value = true;

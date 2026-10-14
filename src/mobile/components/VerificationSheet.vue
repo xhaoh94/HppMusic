@@ -139,7 +139,7 @@ const cancel = () => {
 </script>
 
 <template>
-  <Sheet v-model="open" :title="title" :dismiss-on-mask="false">
+  <Sheet v-model="open" :title="title" :dismiss-on-mask="false" elevated>
     <div class="verification">
       <div class="verification-icon">
         <Icon :icon="icon" width="26" height="26" />
