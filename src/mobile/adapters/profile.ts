@@ -39,7 +39,9 @@ export interface MembershipCard {
   key: MembershipKind;
   label: string;
   kind: MembershipKind;
-  /** 到期文案（"1个月后到期"）；未开通是空串 */
+  /** 具体到期时间（`2026-11-26 13:55`）；未开通是空串 */
+  expiresAt: string;
+  /** 相对到期文案（`1个月后到期`）；未开通是空串 */
   expiry: string;
   active: boolean;
 }
@@ -114,6 +116,25 @@ export const formatVipExpiry = (endTime: unknown, now = new Date()): string => {
 };
 
 /**
+ * 具体到期时间（`2026-11-26 13:55`）。
+ *
+ * 手动拼而不是 `toLocaleString()`：Android WebView 的 `toLocaleString` 输出随系统语言
+ * 变（`2026/11/26 下午1:55` 之类），同一屏里两张卡片的格式还可能不一致。
+ *
+ * 上游给的 `vip_end_time` 是 `"2026-11-26 13:55:46"`，**不是** ISO 格式（缺 T），
+ * 但 `new Date()` 在各引擎上都能按本地时间解析 —— 上一层的相对文案也是这么算的，
+ * 实测能正常得出"1个月后到期"。解不开就原样展示，不隐藏信息。
+ */
+export const formatVipDate = (endTime: unknown): string => {
+  const value = text(endTime);
+  if (!value) return '';
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return value;
+  const pad = (part: number) => String(part).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+};
+
+/**
  * 会员卡。
  *
  * 超级/豪华是**顶层布尔**（`su_vip_end_time` / `vip_end_time`），概念/畅听是
@@ -125,37 +146,28 @@ const buildMemberships = (
   now: Date,
 ): MembershipCard[] => {
   const status = getAccountVipStatus(vip);
-  const superExpiry = formatVipExpiry(vip.su_vip_end_time, now);
-  const deluxeExpiry = formatVipExpiry(vip.vip_end_time, now);
+  /** 四种会员的到期时间**字段各不相同**，不能统一读一个 */
+  const card = (
+    key: MembershipKind,
+    label: string,
+    active: boolean,
+    endTime: unknown,
+  ): MembershipCard => ({
+    key,
+    label,
+    kind: key,
+    expiresAt: active ? formatVipDate(endTime) : '',
+    expiry: active ? formatVipExpiry(endTime, now) : '',
+    active,
+  });
+
   return [
-    {
-      key: 'super',
-      label: '超级VIP',
-      kind: 'super',
-      expiry: superExpiry,
-      active: status.superVip,
-    },
-    {
-      key: 'deluxe',
-      label: '豪华VIP',
-      kind: 'deluxe',
-      expiry: deluxeExpiry,
-      active: status.deluxeVip,
-    },
-    {
-      key: 'concept',
-      label: '概念会员',
-      kind: 'concept',
-      expiry: formatVipExpiry(status.conceptVip?.vip_end_time, now),
-      active: Boolean(status.conceptVip),
-    },
-    {
-      key: 'music',
-      label: '畅听会员',
-      kind: 'music',
-      expiry: formatVipExpiry(status.musicVip?.vip_end_time, now),
-      active: Boolean(status.musicVip),
-    },
+    // 超级VIP / 豪华VIP：顶层字段
+    card('super', '超级VIP', status.superVip, vip.su_vip_end_time),
+    card('deluxe', '豪华VIP', status.deluxeVip, vip.vip_end_time),
+    // 概念 / 畅听：busi_vip 数组里的产品项，各自带自己的 vip_end_time
+    card('concept', '概念会员', Boolean(status.conceptVip), status.conceptVip?.vip_end_time),
+    card('music', '畅听会员', Boolean(status.musicVip), status.musicVip?.vip_end_time),
   ];
 };
 
