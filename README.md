@@ -55,7 +55,7 @@ pnpm install
 | `pnpm build` | 完整构建：API 打包 → 边界检查 → 类型检查 → Vite 构建 → CSS 兼容检查 |
 | `pnpm check` | 边界检查 + 类型检查（提交前跑这个） |
 | `pnpm test` | 守卫测试（边界、vendor 闭包、路由表、CSS 基线） |
-| `pnpm verify:layout [url]` | 无头 Chrome 布局断言（4 档视口，28 项检查） |
+| `pnpm verify:layout [url]` | 无头 Chrome 布局断言（4 档视口，32 项检查） |
 | `pnpm android:apk` | 一键出 debug APK（自动探测 JAVA_HOME，含前端构建与同步） |
 | `pnpm sync:upstream` | 从上游同步内核（`--check` 只校验不复制） |
 
@@ -83,7 +83,7 @@ src/
 ├─ renderer/                ← vendor（只读）
 ├─ shared/                  ← vendor（只读）
 └─ main/external/           ← vendor（只读）
-scripts/                    API 打包、上游同步、边界/兼容守卫、验证工具
+scripts/                    API 打包、上游同步、边界/兼容守卫、验证工具、图标生成
 server/                     KuGou API 子模块
 android/                    原生工程
 docs/                       文档与已知缺口
