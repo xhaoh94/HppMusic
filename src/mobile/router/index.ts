@@ -122,6 +122,12 @@ export const router = createRouter({
       meta: { title: '我的' },
     },
     {
+      path: '/profile/edit',
+      name: 'profile-edit',
+      component: () => import('@mobile/features/profile/EditProfilePage.vue'),
+      meta: { title: '编辑资料' },
+    },
+    {
       path: '/favorites',
       name: 'favorites',
       component: () => import('@mobile/features/favorites/FavoritesPage.vue'),

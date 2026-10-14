@@ -38,6 +38,7 @@ import {
   iconDiamond,
   iconFavorite,
   iconHistory,
+  iconPencil,
   iconSettings,
   iconUser,
 } from '@mobile/icons';
@@ -159,6 +160,19 @@ onMounted(() => {
           </div>
           <p v-if="summary.signature" class="signature ellipsis">{{ summary.signature }}</p>
         </div>
+        <!--
+          编辑入口放在身份卡里，而不是塞进下面的“更多”列表：
+          改资料是这一屏的主要意图之一，藏到列表里等于没入口。
+        -->
+        <button
+          type="button"
+          class="edit-entry"
+          aria-label="编辑资料"
+          @click="open({ name: 'profile-edit' })"
+        >
+          <Icon :icon="iconPencil" width="15" height="15" />
+          <span>编辑</span>
+        </button>
       </div>
 
       <dl class="stats">
@@ -290,6 +304,26 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
+}
+
+.edit-entry {
+  /* margin-left: auto 而不是给 identity-copy 加 flex:1：
+     名字很短时也要紧贴右边，且不能把长昵称的省略号位置带偏 */
+  flex: 0 0 auto;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  background: var(--bg-input);
+}
+
+.edit-entry:active {
+  background: var(--fill-muted);
 }
 
 .avatar {

@@ -36,6 +36,7 @@ import * as tablerArrowLeft from '@iconify/icons-tabler/arrow-left';
 import * as tablerArrowsShuffle from '@iconify/icons-tabler/arrows-shuffle';
 import * as tablerBrandQq from '@iconify/icons-tabler/brand-qq';
 import * as tablerBrandWechat from '@iconify/icons-tabler/brand-wechat';
+import * as tablerCamera from '@iconify/icons-tabler/camera';
 import * as tablerCheck from '@iconify/icons-tabler/circle-check';
 import * as tablerChevronLeft from '@iconify/icons-tabler/chevron-left';
 import * as tablerChevronRight from '@iconify/icons-tabler/chevron-right';
@@ -61,6 +62,7 @@ import * as tablerMoon from '@iconify/icons-tabler/moon';
 import * as tablerMusic from '@iconify/icons-tabler/music';
 import * as tablerMusicOff from '@iconify/icons-tabler/music-off';
 import * as tablerPause from '@iconify/icons-tabler/pause';
+import * as tablerPencil from '@iconify/icons-tabler/pencil';
 import * as tablerPlay from '@iconify/icons-tabler/play';
 import * as tablerPlayerPause from '@iconify/icons-tabler/player-pause';
 import * as tablerPlayerPlay from '@iconify/icons-tabler/player-play';
@@ -251,3 +253,7 @@ export const iconMessageCircle = messageCircle;
 export const iconRepeat = repeat;
 export const iconRepeatOnce = repeatOnce;
 export const iconShuffle = arrowsShuffle;
+
+/* ── 个人资料编辑 ── */
+export const iconCamera: IconifyIcon = icon(tablerCamera, 'camera');
+export const iconPencil: IconifyIcon = icon(tablerPencil, 'pencil');
