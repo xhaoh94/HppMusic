@@ -51,6 +51,7 @@ import * as tablerInfoCircle from '@iconify/icons-tabler/info-circle';
 import * as tablerList from '@iconify/icons-tabler/list';
 import * as tablerLoader2 from '@iconify/icons-tabler/loader-2';
 import * as tablerLock from '@iconify/icons-tabler/lock';
+import * as tablerMessageCircle from '@iconify/icons-tabler/message-circle';
 import * as tablerMicrophone from '@iconify/icons-tabler/microphone';
 import * as tablerMusic from '@iconify/icons-tabler/music';
 import * as tablerMusicOff from '@iconify/icons-tabler/music-off';
@@ -123,6 +124,7 @@ export const infoCircle = icon(tablerInfoCircle, 'info-circle');
 export const list = icon(tablerList, 'list');
 export const loader2 = icon(tablerLoader2, 'loader-2');
 export const lock = icon(tablerLock, 'lock');
+export const messageCircle = icon(tablerMessageCircle, 'message-circle');
 export const microphone = icon(tablerMicrophone, 'microphone');
 export const music = icon(tablerMusic, 'music');
 export const musicOff = icon(tablerMusicOff, 'music-off');
@@ -193,3 +195,5 @@ export const iconSlidersHorizontal = adjustmentsHorizontal;
 /* ── 首页磁贴专用 ── */
 export const iconMicrophone = microphone;
 export const iconSparkles = sparkles;
+/** 评论（播放页功能行） */
+export const iconMessageCircle = messageCircle;

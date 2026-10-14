@@ -21,12 +21,11 @@
  * 三页都常驻挂载，只做 transform 平移 —— 这样歌词的滚动位置与自动跟随
  * 在来回切换时不会丢。
  *
- * ## 功能行为 4 项
+ * ## 功能行 5 项
  *
- * 音效 · 音质 · 收藏 · 更多。
- * **评论暂不提供**：内核的 `/comment/music` 实测两次都返回不了列表
- * （响应里只有 `err_code`/`status`，没有 `list`/`hot`），需要单独排查接口后再加 ——
- * 先放一个点了没反应的评论图标比少一个入口更糟。
+ * 音效 · 音质 · 评论 · 收藏 · 更多。
+ * 评论为**只读列表**：内核 `api/comment.ts` 只有取数据的接口，没有点赞/发表，
+ * 所以面板里不渲染可点的心形（放一个点不动的按钮比不显示更糟）。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -39,6 +38,7 @@ import LyricsPanel from './LyricsPanel.vue';
 import QualitySheet from './QualitySheet.vue';
 import EffectSheet from './EffectSheet.vue';
 import MoreSheet from './MoreSheet.vue';
+import CommentSheet from './CommentSheet.vue';
 import {
   formatTime,
   useLyrics,
@@ -54,6 +54,7 @@ import logger from '@/utils/logger';
 import {
   iconBack,
   iconFavorite,
+  iconMessageCircle,
   iconMore,
   iconMusic,
   iconNext,
@@ -107,6 +108,7 @@ const queueOpen = ref(false);
 const qualityOpen = ref(false);
 const effectOpen = ref(false);
 const moreOpen = ref(false);
+const commentOpen = ref(false);
 
 const scrubbing = ref(false);
 const scrubValue = ref(0);
@@ -284,6 +286,9 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
         <button type="button" class="func-button" aria-label="音质" @click="qualityOpen = true">
           <Icon :icon="iconVolume" width="22" height="22" />
         </button>
+        <button type="button" class="func-button" aria-label="评论" @click="commentOpen = true">
+          <Icon :icon="iconMessageCircle" width="22" height="22" />
+        </button>
         <button
           type="button"
           class="func-button"
@@ -374,6 +379,7 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
   <QualitySheet v-model="qualityOpen" />
   <EffectSheet v-model="effectOpen" />
   <MoreSheet v-model="moreOpen" />
+  <CommentSheet v-model="commentOpen" />
 
   <Sheet v-model="queueOpen" :title="queueTitle">
     <p v-if="!queueSongs.length" class="queue-empty">队列是空的，去首页挑一首吧</p>
