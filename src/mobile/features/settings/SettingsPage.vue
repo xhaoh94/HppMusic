@@ -28,6 +28,10 @@ import PageHeader from '@mobile/components/PageHeader.vue';
 import Sheet from '@mobile/components/Sheet.vue';
 import SettingsSection from '@mobile/components/settings/SettingsSection.vue';
 import SwitchRow from '@mobile/components/settings/SwitchRow.vue';
+import {
+  autoPlayAndOpenOnEnter,
+  openPlayerOnSelect,
+} from '@mobile/composables/usePlaybackPrefs';
 import SegmentedRow from '@mobile/components/settings/SegmentedRow.vue';
 import ActionRow from '@mobile/components/settings/ActionRow.vue';
 import { setThemePreference, themePreference, type ThemePreference } from '@mobile/design/theme';
@@ -155,6 +159,20 @@ onMounted(async () => {
           v-model="setting.autoNext"
           label="播放失败自动下一首"
           description="当前曲目无法播放时自动跳过"
+        />
+        <!--
+          下面两项是**移动端自己的偏好**（存在 localStorage，不在内核 setting 里——
+          那是只读 vendor）。它们只影响歌曲列表页（目前是随便听）的跳转行为。
+        -->
+        <SwitchRow
+          v-model="autoPlayAndOpenOnEnter"
+          label="进入页面时自动播"
+          description="切入随便听时自动播第一首并打开播放页（已在播则不打断）"
+        />
+        <SwitchRow
+          v-model="openPlayerOnSelect"
+          label="点歌后进播放页"
+          description="在列表里点一首歌后直接打开播放页；关着则留在列表方便连试"
         />
         <SegmentedRow
           v-model="setting.seekForwardOffset"

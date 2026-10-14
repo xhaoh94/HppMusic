@@ -32,19 +32,23 @@
  * 这个频道一次给几十首，滑动找歌很低效，所以页内放一个过滤框
  * （只是**本地过滤**，不触发搜索接口 —— 它是"在结果里找"，不是"搜全网"）。
  */
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onActivated, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import SongRow from '@mobile/components/SongRow.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
 import { Icon } from '@iconify/vue';
 import { iconClose, iconRefresh, iconSearch } from '@mobile/icons';
-import { usePlaybackActions } from '@mobile/adapters/player';
+import { useNowPlaying, usePlaybackActions } from '@mobile/adapters/player';
 import { getFreeListenSongs } from '@/api/music';
 import { extractList } from '@/utils/extractors';
 import { mapTopSong } from '@/utils/mappers';
 import { filterSongsByQuery } from '@/utils/songList';
 import { captureUserSession } from '@/utils/userSession';
 import { useUserStore } from '@/stores/user';
+import {
+  autoPlayAndOpenOnEnter,
+  openPlayerOnSelect,
+} from '@mobile/composables/usePlaybackPrefs';
 import logger from '@/utils/logger';
 import type { Song } from '@/models/song';
 import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
@@ -54,6 +58,7 @@ defineOptions({ name: 'FreeListenPage' });
 
 const user = useUserStore();
 const router = useRouter();
+const { isPlaying } = useNowPlaying();
 const { playSong, playList, activeQueue, remainingInQueue, appendToActiveQueue } =
   usePlaybackActions();
 
@@ -114,11 +119,16 @@ const clearSearch = () => {
   searchQuery.value = '';
 };
 
+/**
+ * 点击列表里的某一首。
+ *
+ * 是否跳播放页由设置里的「点歌后进入播放页」决定（默认关）。两种都合理：
+ * 关着方便连着试听几首；开着则是"挑了就走"，不用再多点一次。
+ */
 const onSelect = async (song: Song) => {
   const context = displayedSongs.value;
   const started = await playSong(song, context, QUEUE_META);
-  // 点歌直接进播放页。只在真的播起来了才跳 —— 否则用户看到的是一个空壳播放页
-  if (started) void router.push({ name: 'player' });
+  if (started && openPlayerOnSelect.value) void router.push({ name: 'player' });
 };
 
 /**
@@ -181,7 +191,42 @@ const playAll = async () => {
   await playList(context, QUEUE_META);
 };
 
-onMounted(() => void load());
+/**
+ * 首批加载的 promise。
+ *
+ * `onActivated` 可能在**它完成之前**就触发 —— 冷启动直接落到本页时，
+ * `onMounted` 里的 `load()` 还在路上，那时 `songs` 是空的。
+ * 实测踩到：日志里 `{"pref":true,"playing":false,"songs":0}`，
+ * 于是"自动播第一首"静默失效（拿不到第一首）。
+ */
+let firstLoad: Promise<void> | null = null;
+
+onMounted(() => {
+  firstLoad = load();
+});
+
+/**
+ * 切入本页时的默认行为：自动播第一首 + 进全屏播放页。
+ *
+ * 用 `onActivated` 而不是 `onMounted`：本页走 KeepAlive，切回来时不会重新挂载。
+ *
+ * 三个"不动手"的条件：
+ * · 设置里的「进入页面时自动播」关着（默认就是关的）→ 不擅自出声、也不跳；
+ * · 已经在播 → 不打断用户正在听的（那很惊悚），也就不跳；
+ * · 列表还没加载出来 → 先等首批加载完（否则拿不到第一首）。
+ */
+onActivated(() => {
+  void (async () => {
+    if (!autoPlayAndOpenOnEnter.value) return;
+    if (isPlaying.value) return;
+    await firstLoad;
+    if (isPlaying.value) return;
+    const first = songs.value[0];
+    if (!first) return;
+    const started = await playSong(first, songs.value, QUEUE_META);
+    if (started) void router.push({ name: 'player' });
+  })();
+});
 </script>
 
 <template>
