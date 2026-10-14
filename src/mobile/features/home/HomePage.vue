@@ -250,7 +250,7 @@ watch(activeCategoryId, () => void loadRecommended());
         title="暂时没有推荐歌单"
         description="稍后再试试"
       />
-      <div v-else class="grid">
+      <div v-else class="scroll-row scroll-x">
         <MediaCard
           v-for="playlist in recommended"
           :key="`rec-${playlist.id}`"
@@ -277,7 +277,7 @@ watch(activeCategoryId, () => void loadRecommended());
         action-label="重试"
         @action="loadTopIp"
       />
-      <div v-else class="grid">
+      <div v-else class="scroll-row scroll-x">
         <MediaCard
           v-for="playlist in topIp"
           :key="`ip-${playlist.id}`"
@@ -419,10 +419,34 @@ watch(activeCategoryId, () => void loadRecommended());
   font-weight: var(--weight-semibold);
 }
 
-.grid {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: var(--sp-4) var(--sp-3);
+/**
+ * 横向滚动行（推荐歌单 / 编辑精选）。
+ *
+ * 为什么不做纵向双列网格：这两个分区各 20~30 张卡，纵排会把首页拉得很长
+ * （实测两段加起来 49 张卡，要滑十几屏才能到底），而用户对“推荐/精选”
+ * 大多是“随便看几张”的浏览行为 —— 横向一行既不占高度，也保留了可浏览性。
+ */
+.scroll-row {
+  display: flex;
+  gap: var(--sp-3);
+  /* 上下留白给卡片的 :active 缩放留出空间，否则会被 overflow 裁掉 */
+  padding: var(--sp-1) var(--sp-4) var(--sp-2);
+  /*
+   * 负外边距把滚动区向两侧延伸到屏幕边缘：卡片从页面内边距开始（视觉对齐），
+   * 但滑到底时最后一张能完全滑进屏幕，不会被内边距卡住。
+   */
+  margin: 0 calc(var(--sp-4) * -1);
+  /* 横向为主才响应横向拖拽，否则会和页面纵向滚动抢手势 */
+  touch-action: pan-x;
+  scroll-snap-type: x proximity;
+  scroll-padding-left: var(--sp-4);
+}
+
+/* 卡片固定宽度：横向流里不能用 width:100%（那是网格的写法） */
+.scroll-row :deep(.media-card) {
+  flex: 0 0 132px;
+  width: 132px;
+  scroll-snap-align: start;
 }
 
 .footer-note {
