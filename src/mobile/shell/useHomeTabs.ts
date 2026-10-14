@@ -15,8 +15,8 @@ export interface HomeTab {
 
 export const HOME_TAB_CATALOG: readonly HomeTab[] = [
   { key: 'home', title: '发现', path: '/main/home' },
-  // 默认页签 = 发现 + 免费听，与参考产品一致；其余留给想用的人自己勾选
-  { key: 'free-listen', title: '免费听', path: '/main/free-listen' },
+  // 默认页签 = 发现 + 随便听，与参考产品一致；其余留给想用的人自己勾选
+  { key: 'free-listen', title: '随便听', path: '/main/free-listen' },
   { key: 'listen-together', title: '一起听', path: '/main/listen-together' },
   { key: 'explore', title: '探索', path: '/main/explore' },
 ];

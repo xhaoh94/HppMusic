@@ -1,8 +1,21 @@
 <script setup lang="ts">
 /**
- * 免费听。
+ * 随便听（原「免费听」）。
  *
- * 数据来自 `/ai/recommend/song`（AI 推荐免费歌曲）—— 是首页「免费听」子页签的落地页。
+ * ## 为什么改名
+ *
+ * 「免费听」这个名字是**误读**的。查证结果：
+ * · 接口的真实上游是 `/concepts/v1/ai/recommend_song` —— 是**酷狗概念版**的 AI 推荐
+ *   （路由 `/ai/recommend/song` 只是 KuGouMusicApi 的包装名）
+ * · 概念版是酷狗的"免费听歌产品"，它的免费能力来自**畅听VIP**（账号里 `busi_vip`
+ *   的 `tvip`），靠签到/活动赠送、当天签当天有效
+ * · 所以"能不能免费听"取决于**账号特权**，跟歌是从哪个接口来的无关。
+ *   实测：每日推荐里标着 `pay_type=3` 的付费歌，在同一账号下同样能拿到音源并播放
+ *
+ * 频道实际提供的体验是"一次给一批、不满意换一批、不用自己挑"，所以叫「随便听」。
+ *
+ * ⚠️ 路由 path、`name`、目录名与 `queueId` 仍保留 `free-listen`：改 path 会破坏
+ * 深链接，改 queueId 会让已持久化的播放队列快照对不上（那是写进 storage 的）。
  *
  * ## 三个从上游继承下来的处理（都不是可有可无的）
  *
@@ -16,7 +29,7 @@
  *
  * ## 页面内搜索
  *
- * 免费听一次给几十首，滑动找歌很低效，所以页内放一个过滤框
+ * 这个频道一次给几十首，滑动找歌很低效，所以页内放一个过滤框
  * （只是**本地过滤**，不触发搜索接口 —— 它是"在结果里找"，不是"搜全网"）。
  */
 import { computed, onMounted, ref } from 'vue';
@@ -37,7 +50,7 @@ import type { Song } from '@/models/song';
 const user = useUserStore();
 const { playSong, playList } = usePlaybackActions();
 
-const QUEUE_META = { queueId: 'queue:free-listen', title: '免费听', subtitle: '' };
+const QUEUE_META = { queueId: 'queue:free-listen', title: '随便听', subtitle: '' };
 
 const songs = ref<Song[]>([]);
 const loading = ref(true);
@@ -112,7 +125,7 @@ onMounted(() => void load());
   <div class="free-page">
     <!--
       不放 PageHeader：页面已经在「主页」分区下，顶部子页签栏已经表明当前位置，
-      再顶一行「‹ 免费听」是重复信息（用户直接反馈过）。
+      再顶一行「‹ 随便听」是重复信息（用户直接反馈过）。
       原本在 PageHeader 里的「换一批」挪到搜索栏右侧，省下一整行高度。
     -->
     <div class="toolbar">

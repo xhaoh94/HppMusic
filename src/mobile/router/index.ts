@@ -54,7 +54,7 @@ export const router = createRouter({
       path: '/main/free-listen',
       name: 'free-listen',
       component: () => import('@mobile/features/free-listen/FreeListenPage.vue'),
-      meta: { section: 'main', title: '免费听' },
+      meta: { section: 'main', title: '随便听' },
     },
     {
       path: '/main/listen-together',
