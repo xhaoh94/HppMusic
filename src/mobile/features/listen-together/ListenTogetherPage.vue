@@ -53,14 +53,31 @@ const draft = ref('');
 const busy = ref(false);
 
 /* ── 列表 ── */
-const load = async (reset = true) => {
+/** 返回是否成功：调用方（刷新）要据此决定要不要提示，失败时 load 内部已经 toast 过了 */
+const load = async (reset = true): Promise<boolean> => {
   try {
     // roomType 只能是 0：上游已下线"自习室"，传其它值 store 会直接抛错
     await room.loadRooms({ reset, roomType: 0 });
+    return true;
   } catch (error) {
     logger.warn('ListenTogether', 'Load rooms failed', error);
     toast.danger(error instanceof Error ? error.message : '房间列表加载失败');
+    return false;
   }
+};
+
+/**
+ * 手动刷新。
+ *
+ * 房间列表是有可能长期不变的一块内容（不像首页每次进来都重新拉），扫一眼发现没新房间
+ * 时用户需要一个明确的“再拉一次”入口。成功后报一下数量：列表本身没变化时，
+ * 光看界面分不出“刷新了但确实没有”和“压根没点上”。
+ */
+const refresh = async () => {
+  if (room.loadingRooms) return;
+  if (!(await load(true))) return;
+  const count = room.rooms.length;
+  toast.info(count ? `已刷新，共 ${count} 个房间` : '已刷新，暂时没有开放的房间');
 };
 
 const loadMore = () => {
@@ -380,6 +397,25 @@ const goBackToList = () => {
         <Icon :icon="iconAdd" width="24" height="24" />
       </button>
 
+      <!-- 刷新：列表可能长期不变，给一个明确的手动拉取入口 -->
+      <div class="list-toolbar">
+        <button
+          type="button"
+          class="refresh-button"
+          :disabled="room.loadingRooms"
+          aria-label="刷新房间列表"
+          @click="refresh"
+        >
+          <Icon
+            :icon="iconRefresh"
+            width="16"
+            height="16"
+            :class="{ 'is-spinning': room.loadingRooms }"
+          />
+          刷新
+        </button>
+      </div>
+
       <div class="page-body-scroll scroll-y">
         <EmptyState v-if="room.loadingRooms && !room.rooms.length" tone="loading" title="正在加载房间" />
         <EmptyState
@@ -508,6 +544,46 @@ const goBackToList = () => {
   min-height: 0;
   display: flex;
   flex-direction: column;
+}
+
+/* 列表工具栏：只放刷新，固定在滚动区之外（列表滚动时它不跟着跑） */
+.list-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--sp-4) var(--sp-1);
+}
+
+.refresh-button {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 32px;
+  padding: 0 var(--sp-3);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-sm);
+  color: var(--text-secondary);
+  background: var(--fill-subtle);
+}
+
+.refresh-button:active:not(:disabled) {
+  background: var(--fill-muted);
+  color: var(--text-primary);
+}
+
+.refresh-button:disabled {
+  opacity: 0.6;
+}
+
+/* 加载中让图标转起来：否则点了之后没有任何反馈 */
+.refresh-button .is-spinning {
+  animation: refresh-spin 900ms linear infinite;
+}
+
+@keyframes refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .page-body-scroll {
