@@ -11,6 +11,7 @@
  * 对手机来说"到点暂停"也正是唯一有意义的行为（定时关机该交给系统）。
  */
 import { computed, ref } from 'vue';
+import { useRouter } from 'vue-router';
 import Sheet from '@mobile/components/Sheet.vue';
 import { usePlayerStore } from '@/stores/player';
 import { useToastStore } from '@/stores/toast';
@@ -20,6 +21,19 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
 
 const player = usePlayerStore();
 const toast = useToastStore();
+const router = useRouter();
+
+/** MV 挂在歌曲下，用 albumAudioId 定位；没有它就没法查 MV */
+const albumAudioId = computed(() => String(player.currentTrackSnapshot?.albumAudioId ?? ''));
+
+const openMv = () => {
+  if (!albumAudioId.value) {
+    toast.warning('当前曲目缺少 MV 标识，无法查找');
+    return;
+  }
+  emit('update:modelValue', false);
+  void router.push({ name: 'mv', params: { id: albumAudioId.value } });
+};
 
 const TIMER_OPTIONS = [5, 15, 30, 60, 90];
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
@@ -105,6 +119,23 @@ const setSpeed = (speed: number) => {
         </button>
       </div>
     </section>
+
+    <!-- MV 入口：上游的 MV 挂在歌曲下（/kmr/audio/mv?album_audio_id=），
+         所以带上当前曲目的 albumAudioId，由 MV 页自己查有没有、再取地址 -->
+    <section class="block">
+      <header class="block-head">
+        <h3 class="block-title">视频</h3>
+      </header>
+      <button
+        type="button"
+        class="action-item"
+        :disabled="!albumAudioId"
+        @click="openMv"
+      >
+        <span class="action-label">查看 MV</span>
+        <span class="action-note">{{ albumAudioId ? '同一首歌的官方 MV' : '当前曲目没有 MV 标识' }}</span>
+      </button>
+    </section>
   </Sheet>
 </template>
 
@@ -165,5 +196,34 @@ const setSpeed = (speed: number) => {
   font-size: var(--font-md);
   color: var(--danger);
   background: var(--fill-subtle);
+}
+
+/* MV 入口行 */
+.action-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-height: 52px;
+  padding: var(--sp-2) 0;
+  text-align: left;
+}
+
+.action-item:active:not(:disabled) {
+  background: var(--fill-subtle);
+}
+
+.action-item:disabled {
+  opacity: 0.45;
+}
+
+.action-label {
+  font-size: var(--font-md);
+  color: var(--text-primary);
+}
+
+.action-note {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
 }
 </style>

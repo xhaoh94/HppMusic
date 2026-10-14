@@ -99,6 +99,12 @@ export const router = createRouter({
       meta: { title: '听歌识曲' },
     },
     {
+      path: '/mv/:id',
+      name: 'mv',
+      component: () => import('@mobile/features/mv/MvPlayerPage.vue'),
+      meta: { title: 'MV' },
+    },
+    {
       path: '/profile',
       name: 'profile',
       component: () => import('@mobile/features/profile/ProfilePage.vue'),
