@@ -169,6 +169,7 @@ Capacitor 自带的 XHR 补丁还不支持 `responseType`，所以二进制请�
 | **播放地址需要 auth** | `/song/url/auth/merge` 必须先用 `getUserVerify()` 拿 `auth`，否则拿不到地址 | 走内核的 `resolveAudioUrl`，不要自己拼参数 |
 | **时间单位是秒** | 见「三之三」 | —— |
 | **二进制请求体必须转 Buffer** | 传 `Uint8Array` 时签名会用 `JSON.stringify` 的字节数组结果参与 MD5（键值全错），上游直接 `error_code 40000`；同时 Capacitor 发出去的字节数也不对（32000 → 308891） | 在桥接层统一 `Buffer.from(...)`（见 `apiBridge.toBinaryBody`）。影响听歌识曲、云盘/头像上传等所有二进制接口 |
+| **路由扫描会漏掉“当回调传”的请求** | 形如 `challenge.request('/get/verify/info', ...)` 的调用扫不到 —— 漏掉的后果不只是 404：调用方在 await 一个**永不 resolve** 的 Promise（实测：创建一起听房间时 phase 卡在 creating 不返回、无报错） | 扫两类写法：`request.get('/x')` 与 `.request('/x')`；不确定的显式写入 `REQUIRED_ROUTES` |
 
 另外两个从上游继承下来、容易被误判为 bug 的行为：
 
