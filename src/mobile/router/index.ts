@@ -50,6 +50,12 @@ export const router = createRouter({
       component: () => import('@mobile/features/explore/ExplorePage.vue'),
       meta: { section: 'main', title: '探索' },
     },
+    {
+      path: '/main/free-listen',
+      name: 'free-listen',
+      component: () => import('@mobile/features/free-listen/FreeListenPage.vue'),
+      meta: { section: 'main', title: '免费听' },
+    },
 
     // ── 全屏页（不带外壳） ──
     {
