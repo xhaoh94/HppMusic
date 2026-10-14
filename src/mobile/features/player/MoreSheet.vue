@@ -16,8 +16,27 @@ import Sheet from '@mobile/components/Sheet.vue';
 import { usePlayerStore } from '@/stores/player';
 import { useToastStore } from '@/stores/toast';
 
-const props = defineProps<{ modelValue: boolean }>();
-const emit = defineEmits<{ 'update:modelValue': [value: boolean] }>();
+const props = defineProps<{
+  modelValue: boolean;
+  /** 当前视图模式（与播放页共享同一份 settingStore.lyricViewMode） */
+  skin?: 'cover' | 'lyric' | 'portrait';
+}>();
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean];
+  'update:skin': [value: 'cover' | 'lyric' | 'portrait'];
+}>();
+
+/** 「换肤」可选项（对齐旧项目菜单里那一项的名字） */
+const SKIN_OPTIONS = [
+  { value: 'cover' as const, label: '封面' },
+  { value: 'lyric' as const, label: '简约歌词' },
+  { value: 'portrait' as const, label: '写真' },
+];
+
+const pickSkin = (value: 'cover' | 'lyric' | 'portrait') => {
+  emit('update:skin', value);
+  // 选完不关菜单：用户可能想连着试几种看效果
+};
 
 const player = usePlayerStore();
 const toast = useToastStore();
@@ -116,6 +135,25 @@ const setSpeed = (speed: number) => {
           @click="setSpeed(speed)"
         >
           {{ speed }}×
+        </button>
+      </div>
+    </section>
+
+    <!-- 换肤：旧项目把视图模式放在这个菜单里（而不是播放页上的单独按钮） -->
+    <section class="block">
+      <header class="block-head">
+        <h3 class="block-title">换肤</h3>
+      </header>
+      <div class="chips">
+        <button
+          v-for="option in SKIN_OPTIONS"
+          :key="option.value"
+          type="button"
+          class="chip"
+          :class="{ 'is-active': props.skin === option.value }"
+          @click="pickSkin(option.value)"
+        >
+          {{ option.label }}
         </button>
       </div>
     </section>

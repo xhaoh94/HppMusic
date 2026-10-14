@@ -2,30 +2,35 @@
 /**
  * 全屏播放页。
  *
- * ## 三段式底栏（按参考产品/旧项目的版式）
+ * ## 布局（对齐旧项目的竖排版式）
  *
  * ```
- * [音效] [音质] [收藏] [更多]      ← ① 功能行
- * ━━━━━━━━━━━━━━━━━━              ← ② 进度条（独立一行，整宽）
- * 00:00                    04:14   ←    时间行
- *  ↻     ⏮     ▶     ⏭     ≡³    ← ③ 传输行
+ * [‹ 返回]                      ← 顶栏只放返回（不重复歌名：下方就有）
+ *        [封面]                 ← 随视图模式变化
+ *      [歌名（大）]
+ *      [歌手（小）]
+ *   [歌词滚动区（flex:1）]
+ * [功能行：音效 音质 评论 收藏 更多]
+ * [进度条（整宽）]
+ * [时间行：已播 / 总长]
+ * [传输行：模式 上一首 播放 下一首 队列]
  * ```
  *
- * ⚠️ 进度条**单独一行**、时间在它下面 —— 不是"时间—进度条—时间"同一行。
- * 参考产品就是这么排的：进度条整宽可拖（触屏上拖拽区越大越好），
- * 时间放下面当读数。之前我按桌面版式做成了同一行，拖动区只有一半宽。
+ * 之前做成了"横向三页（封面/歌词/写真）+ 页指示点 + 顶栏居中歌名与模式标签"——
+ * 那是参考产品的另一套版式，但**与旧项目不一致**（用户明确指出）。现在改为：
+ * 封面、歌名、歌手、歌词**纵向排在同一页**，三种视图只改变"主视觉"那一块。
  *
- * ## 三种视图模式（横向三页）
+ * ## 三种视图（换肤）
  *
- * 封面 / 简约歌词 / 写真，左右滑动或点标题切换。
- * 三页都常驻挂载，只做 transform 平移 —— 这样歌词的滚动位置与自动跟随
- * 在来回切换时不会丢。
+ * · **封面** —— 封面大图 + 下方当前行歌词
+ * · **简约歌词** —— 隐藏封面，把整块空间让给歌词
+ * · **写真** —— 歌手写真**全屏铺满**（含顶栏/底栏区域的背景），歌词浮在上面
  *
- * ## 功能行 5 项
+ * 写真之所以要全屏：旧项目就是全屏的（顶栏与底栏浮在写真之上），
+ * 只在"内容区"里放写真是我上一版的错误。
  *
- * 音效 · 音质 · 评论 · 收藏 · 更多。
- * 评论为**只读列表**：内核 `api/comment.ts` 只有取数据的接口，没有点赞/发表，
- * 所以面板里不渲染可点的心形（放一个点不动的按钮比不显示更糟）。
+ * 切入口两处：**点封面区域循环切换** + 「更多 → 换肤」明确列出（对齐旧项目的菜单）。
+ * 模式记在 `settingStore.lyricViewMode`，播放页与菜单读同一份，不会两处不一致。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
@@ -33,7 +38,6 @@ import { Icon } from '@iconify/vue';
 import Slider from '@mobile/components/Slider.vue';
 import Sheet from '@mobile/components/Sheet.vue';
 import CoverPanel from './CoverPanel.vue';
-import PortraitPanel from './PortraitPanel.vue';
 import LyricsPanel from './LyricsPanel.vue';
 import QualitySheet from './QualitySheet.vue';
 import EffectSheet from './EffectSheet.vue';
@@ -62,6 +66,9 @@ import {
   iconPlay,
   iconPrevious,
   iconQueue,
+  iconRepeat,
+  iconRepeatOnce,
+  iconShuffle,
   iconSlidersHorizontal,
   iconVolume,
 } from '@mobile/icons';
@@ -70,7 +77,7 @@ const router = useRouter();
 const setting = useSettingStore();
 const toast = useToastStore();
 
-const { track, hasTrack, isPlaying, isLoading, coverUrl, title, artist } = useNowPlaying();
+const { track, hasTrack, isPlaying, isLoading, title, artist } = useNowPlaying();
 const {
   togglePlay,
   next,
@@ -81,7 +88,7 @@ const {
   isCurrentFavorite,
   toggleFavorite,
 } = usePlaybackActions();
-const { cycle: cyclePlayMode, label: playModeLabel } = usePlayModeSwitcher();
+const { cycle: cyclePlayMode, current: playMode, label: playModeLabel } = usePlayModeSwitcher();
 const { currentIndex: lyricIndex, lines: lyricLines } = useLyrics();
 
 /** 帧级外推的位置：进度条与歌词逐字都靠它，避免采样值一顿一顿 */
@@ -93,17 +100,60 @@ const portrait = useArtistPortraits(track, {
   carouselInterval: computed(() => Number(setting.lyricCarouselInterval) || 15),
 });
 
-type Panel = 'cover' | 'lyrics' | 'portrait';
-const PANELS: Panel[] = ['cover', 'lyrics', 'portrait'];
-const PANEL_LABELS: Record<Panel, string> = {
-  cover: '封面',
-  lyrics: '歌词',
-  portrait: '写真',
+/* ── 视图模式（与 settingStore 同步，保证"更多 → 换肤"与这里一致） ── */
+
+export type PlayerSkin = 'cover' | 'lyric' | 'portrait';
+
+const SKINS: { value: PlayerSkin; label: string; hint: string }[] = [
+  { value: 'cover', label: '封面', hint: '封面大图 + 当前歌词' },
+  { value: 'lyric', label: '简约歌词', hint: '隐藏封面，歌词占满' },
+  { value: 'portrait', label: '写真', hint: '歌手写真全屏铺满' },
+];
+
+/**
+ * 上游的 `lyricViewMode` 还包含 `amll`（Apple Music 风格逐字歌词），
+ * 那需要一整套 WebGL 渲染栈，移动端不做 —— 遇到就回落到封面模式。
+ */
+const normalizeSkin = (value: unknown): PlayerSkin => {
+  if (value === 'lyric' || value === 'portrait') return value;
+  return 'cover';
 };
 
-const panel = ref<Panel>(setting.lyricViewMode === 'portrait' ? 'portrait' : 'cover');
-const panelIndex = computed(() => PANELS.indexOf(panel.value));
+const skin = ref<PlayerSkin>(normalizeSkin(setting.lyricViewMode));
+watch(
+  () => setting.lyricViewMode,
+  (value) => {
+    const next = normalizeSkin(value);
+    if (next !== skin.value) skin.value = next;
+  },
+);
 
+const setSkin = (value: PlayerSkin) => {
+  skin.value = value;
+  // 写回设置：桌面端的皮肤键是 host:cover / host:portrait，lyric 用默认键
+  setting.lyricViewMode = value === 'lyric' ? 'lyric' : value;
+};
+
+const cycleSkin = () => {
+  const index = SKINS.findIndex((item) => item.value === skin.value);
+  const next = SKINS[(index + 1) % SKINS.length];
+  setSkin(next.value);
+  toast.info(`视图：${next.label}`);
+};
+
+const isPortrait = computed(() => skin.value === 'portrait');
+const showCover = computed(() => skin.value === 'cover');
+/** 封面模式的氛围背景 = 同一张封面（同一张图放大模糊，零额外网络与内存） */
+const coverBackdrop = computed(() => track.value?.coverUrl || track.value?.cover || '');
+
+/* ── 播放模式图标（循环按钮不用文字） ── */
+const playModeIcon = computed(() => {
+  if (playMode.value === 'single') return iconRepeatOnce;
+  if (playMode.value === 'random') return iconShuffle;
+  return iconRepeat;
+});
+
+/* ── 进度 ── */
 const queueOpen = ref(false);
 const qualityOpen = ref(false);
 const effectOpen = ref(false);
@@ -112,9 +162,6 @@ const commentOpen = ref(false);
 
 const scrubbing = ref(false);
 const scrubValue = ref(0);
-const coverFailed = ref(false);
-
-const showCover = computed(() => Boolean(coverUrl.value) && !coverFailed.value);
 
 const displayPositionMs = computed(() =>
   scrubbing.value ? scrubValue.value : positionMs.value,
@@ -134,41 +181,12 @@ const onProgressCommit = (value: number) => {
   void seek(value / 1000);
 };
 
-/** 封面页下方显示的当前行歌词 */
+/** 封面模式下方显示的当前行歌词 */
 const currentLine = computed(() => {
   const index = lyricIndex.value;
   if (index < 0) return '';
   return lyricLines.value[index]?.text ?? '';
 });
-
-/* ── 横向滑动切换三页 ── */
-const SWIPE_THRESHOLD = 64;
-let pointerStartX = 0;
-let pointerStartY = 0;
-let tracking = false;
-
-const onPointerDown = (event: PointerEvent) => {
-  pointerStartX = event.clientX;
-  pointerStartY = event.clientY;
-  tracking = true;
-};
-
-const onPointerUp = (event: PointerEvent) => {
-  if (!tracking) return;
-  tracking = false;
-  const dx = event.clientX - pointerStartX;
-  const dy = event.clientY - pointerStartY;
-  // 纵向为主的滑动是在滚歌词，不切页
-  if (Math.abs(dx) < SWIPE_THRESHOLD || Math.abs(dx) < Math.abs(dy)) return;
-  const step = dx < 0 ? 1 : -1;
-  const nextIndex = panelIndex.value + step;
-  if (nextIndex < 0 || nextIndex >= PANELS.length) return;
-  panel.value = PANELS[nextIndex];
-};
-
-const cyclePanel = () => {
-  panel.value = PANELS[(panelIndex.value + 1) % PANELS.length];
-};
 
 /* ── 功能行 ── */
 const onToggleFavorite = async () => {
@@ -208,73 +226,55 @@ onMounted(() => {
 onBeforeUnmount(() => {
   stopClock();
 });
-
-watch(coverUrl, () => {
-  coverFailed.value = false;
-});
-
-// 用户切过视图后记进设置，下次进播放页沿用
-watch(panel, (value) => {
-  if (value === 'portrait') setting.lyricViewMode = 'portrait';
-  else if (value === 'cover') setting.lyricViewMode = 'cover';
-});
-
-const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / PANELS.length)}%)`);
 </script>
 
 <template>
-  <div class="player-page">
-    <header class="player-header">
-      <button type="button" class="icon-button" aria-label="收起" @click="goBack">
-        <Icon :icon="iconBack" width="24" height="24" class="rotate-down" />
-      </button>
-      <div class="header-text" @click="cyclePanel">
-        <p class="header-title ellipsis">{{ title || '未在播放' }}</p>
-        <p class="header-artist ellipsis">{{ artist }}</p>
-      </div>
-      <button type="button" class="panel-switch" @click="cyclePanel">
-        {{ PANEL_LABELS[panel] }}
-      </button>
-    </header>
-
-    <!-- 三页：封面 / 歌词 / 写真 -->
-    <div
-      class="stage"
-      @pointerdown="onPointerDown"
-      @pointerup="onPointerUp"
-      @pointercancel="tracking = false"
-    >
-      <div class="stage-track" :style="{ transform: trackTransform }">
-        <section class="stage-panel">
-          <CoverPanel
-            :track="track"
-            :current-line="currentLine"
-            :playing="isPlaying"
-            @click="panel = 'lyrics'"
-          />
-        </section>
-        <section class="stage-panel">
-          <LyricsPanel :position-ms="positionMs" :active="panel === 'lyrics'" />
-        </section>
-        <section class="stage-panel">
-          <PortraitPanel
-            :track="track"
-            :position-ms="positionMs"
-            :active="panel === 'portrait'"
-            :portrait-url="portrait.currentUrl.value"
-            :portrait-index="portrait.index.value"
-          />
-        </section>
-      </div>
+  <div class="player-page" :class="{ 'is-portrait': isPortrait }">
+    <!-- 写真全屏背景：absolute 铺满整个视口，内容浮在它之上（旧项目就是全屏的） -->
+    <div v-if="isPortrait" class="portrait-backdrop" aria-hidden="true">
+      <Transition name="portrait-fade" mode="out-in">
+        <img
+          v-if="portrait.currentUrl.value || track?.coverUrl"
+          :key="portrait.index.value"
+          class="portrait-image"
+          :src="portrait.currentUrl.value || track?.coverUrl || ''"
+          alt=""
+        />
+      </Transition>
+      <div class="portrait-veil" />
     </div>
 
-    <div class="panel-dots" aria-hidden="true">
-      <span
-        v-for="item in PANELS"
-        :key="item"
-        class="panel-dot"
-        :class="{ 'is-on': panel === item }"
+    <!-- 封面模式的氛围背景：同一张封面放大模糊（等比写真模式的做法，两张机制统一） -->
+    <div v-else-if="showCover && coverBackdrop" class="cover-backdrop" aria-hidden="true">
+      <img class="cover-backdrop-image" :src="coverBackdrop" alt="" />
+      <div class="cover-backdrop-veil" />
+    </div>
+
+    <header class="player-header">
+      <button type="button" class="icon-button" aria-label="收起" @click="goBack">
+        <Icon :icon="iconBack" width="24" height="24" class="chevron" />
+      </button>
+      <span class="header-spacer" aria-hidden="true" />
+    </header>
+
+    <div class="player-stage" :class="{ 'is-lyrics-only': skin === 'lyric' }">
+      <!-- 封面（仅封面模式） -->
+      <CoverPanel
+        v-if="showCover"
+        :track="track"
+        :current-line="currentLine"
+        :playing="isPlaying"
+        @click="cycleSkin"
       />
+
+      <!-- 歌名 / 歌手：三种模式都显示（旧项目也是常驻） -->
+      <div class="track-info">
+        <p class="track-title ellipsis">{{ title || '未在播放' }}</p>
+        <p class="track-artist ellipsis">{{ artist }}</p>
+      </div>
+
+      <!-- 歌词：三种模式都显示；写真模式下浮在背景上 -->
+      <LyricsPanel :position-ms="positionMs" :active="true" class="lyrics-area" />
     </div>
 
     <div class="player-bar">
@@ -315,7 +315,6 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
         @commit="onProgressCommit"
       />
 
-      <!-- 时间行（进度条下方） -->
       <div class="time-row">
         <span class="time">{{ displayTime }}</span>
         <span class="time">{{ durationText }}</span>
@@ -329,7 +328,7 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
           :aria-label="playModeLabel"
           @click="cyclePlayMode()"
         >
-          <span class="mode-label">{{ playModeLabel.slice(0, 2) }}</span>
+          <Icon :icon="playModeIcon" width="22" height="22" />
         </button>
 
         <button
@@ -378,7 +377,7 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
 
   <QualitySheet v-model="qualityOpen" />
   <EffectSheet v-model="effectOpen" />
-  <MoreSheet v-model="moreOpen" />
+  <MoreSheet v-model="moreOpen" :skin="skin" @update:skin="setSkin" />
   <CommentSheet v-model="commentOpen" />
 
   <Sheet v-model="queueOpen" :title="queueTitle">
@@ -405,18 +404,104 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
 
 <style scoped>
 .player-page {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   background: var(--bg-base);
+  overflow: hidden;
 }
 
-/* ── 顶栏 ── */
+/* ── 封面模式的氛围背景 ── */
+.cover-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+}
+
+.cover-backdrop-image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* 大幅模糊 + 压暗：只留色彩氛围，不抢主封面，也不影响文字可读性 */
+  filter: blur(48px) saturate(1.3);
+  transform: scale(1.25);
+  opacity: 0.5;
+}
+
+.cover-backdrop-veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.3),
+    rgba(0, 0, 0, 0.55) 60%,
+    rgba(0, 0, 0, 0.75)
+  );
+}
+
+/* ── 写真全屏背景 ── */
+.portrait-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+}
+
+.portrait-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  animation: portrait-breathe 18s var(--ease-standard) infinite alternate;
+}
+
+@keyframes portrait-breathe {
+  from {
+    transform: scale(1.04);
+  }
+  to {
+    transform: scale(1.12);
+  }
+}
+
+/* 上下压暗：中间留给写真，两端保证歌名与底栏可读 */
+.portrait-veil {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0.55) 0%,
+    rgba(0, 0, 0, 0.18) 28%,
+    rgba(0, 0, 0, 0.45) 68%,
+    rgba(0, 0, 0, 0.78) 100%
+  );
+}
+
+.portrait-fade-enter-active,
+.portrait-fade-leave-active {
+  transition: opacity 900ms var(--ease-standard);
+}
+
+.portrait-fade-enter-from,
+.portrait-fade-leave-to {
+  opacity: 0;
+}
+
+/* 内容整体浮在写真之上 */
+.player-header,
+.player-stage,
+.player-bar {
+  position: relative;
+  z-index: 1;
+}
+
+/* ── 顶栏：只放返回（歌名在下方，不重复） ── */
 .player-header {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: var(--sp-2);
   padding: var(--safe-top) var(--sp-3) 0;
 }
 
@@ -432,85 +517,91 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
 }
 
 .icon-button:active {
-  background: var(--fill-muted);
+  background: var(--fill-subtle);
 }
 
-.rotate-down {
-  transform: rotate(-90deg);
+/* 返回箭头用 chevron 左（旧项目也是这个）：不是"下拉收起" */
+.chevron {
+  transform: none;
 }
 
-.header-text {
+.is-portrait .icon-button {
+  color: #fff;
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+
+.header-spacer {
   flex: 1;
-  min-width: 0;
+}
+
+/* ── 中部：封面 / 歌名 / 歌词 纵向排列 ── */
+.player-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 简约歌词：歌词占满剩余空间，不需要额外处理；封面不渲染即可 */
+.player-stage.is-lyrics-only {
+  padding-top: var(--sp-2);
+}
+
+.track-info {
+  flex: 0 0 auto;
+  padding: var(--sp-3) var(--sp-5) var(--sp-2);
   text-align: center;
 }
 
-.header-title {
-  margin: 0;
-  font-size: var(--font-md);
-  font-weight: var(--weight-semibold);
+.track-title {
+  margin: 0 0 2px;
+  font-size: var(--font-xl);
+  font-weight: var(--weight-bold);
 }
 
-.header-artist {
+.track-artist {
   margin: 0;
   font-size: var(--font-sm);
   color: var(--text-secondary);
 }
 
-/* 视图模式当前值：点一下循环切换（比三个点更省空间） */
-.panel-switch {
-  flex: 0 0 auto;
-  min-height: 32px;
-  padding: 0 var(--sp-3);
-  border-radius: var(--radius-pill);
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
-  background: var(--fill-subtle);
+/* 写真模式：歌名/歌手压在写真上，需要提高可读性 */
+.is-portrait .track-title {
+  color: #fff;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.6);
 }
 
-/* ── 舞台：三页横向 ── */
-.stage {
+.is-portrait .track-artist {
+  color: rgba(255, 255, 255, 0.72);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.5);
+}
+
+/* 歌词区：吃掉剩余高度 */
+.lyrics-area {
   flex: 1;
   min-height: 0;
-  overflow: hidden;
 }
 
-.stage-track {
-  display: flex;
-  width: 300%;
-  height: 100%;
-  transition: transform var(--duration-slow) var(--ease-standard);
+/* 写真上的歌词要更亮（底色是任意图片） */
+.is-portrait .lyrics-area :deep(.line) {
+  color: rgba(255, 255, 255, 0.55);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.55);
 }
 
-.stage-panel {
-  width: calc(100% / 3);
-  flex: 0 0 calc(100% / 3);
-  height: 100%;
+.is-portrait .lyrics-area :deep(.line.is-near) {
+  color: rgba(255, 255, 255, 0.75);
 }
 
-/* ── 页指示 ── */
-.panel-dots {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--sp-2);
-  height: 16px;
+.is-portrait .lyrics-area :deep(.line.is-active) {
+  color: #fff;
 }
 
-.panel-dot {
-  width: 12px;
-  height: 3px;
-  border-radius: var(--radius-pill);
-  background: var(--divider-strong);
-  transition:
-    width var(--duration-normal) var(--ease-standard),
-    background var(--duration-normal) var(--ease-standard);
+.is-portrait .lyrics-area :deep(.line-sub) {
+  color: rgba(255, 255, 255, 0.6);
 }
 
-.panel-dot.is-on {
-  width: 20px;
-  background: var(--accent);
+.is-portrait .lyrics-area :deep(.lyrics-empty-text) {
+  color: rgba(255, 255, 255, 0.7);
 }
 
 /* ── 底栏 ── */
@@ -521,7 +612,6 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
   padding: var(--sp-2) var(--sp-4) calc(var(--safe-bottom) + var(--sp-3));
 }
 
-/* ① 功能行 */
 .func-row {
   display: flex;
   align-items: center;
@@ -548,7 +638,15 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
   color: var(--accent);
 }
 
-/* ② 进度条（整宽） */
+/* 写真模式下底栏图标要亮起来（背景是图片） */
+.is-portrait .func-button {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.is-portrait .func-button.is-active {
+  color: var(--accent);
+}
+
 .progress-slider {
   width: 100%;
 }
@@ -566,7 +664,10 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
   font-variant-numeric: tabular-nums;
 }
 
-/* ③ 传输行 */
+.is-portrait .time {
+  color: rgba(255, 255, 255, 0.7);
+}
+
 .transport-row {
   display: flex;
   align-items: center;
@@ -593,9 +694,8 @@ const trackTransform = computed(() => `translateX(-${panelIndex.value * (100 / P
   background: var(--fill-subtle);
 }
 
-.mode-label {
-  font-size: var(--font-sm);
-  color: var(--text-secondary);
+.is-portrait .transport-button {
+  color: #fff;
 }
 
 .queue-button {

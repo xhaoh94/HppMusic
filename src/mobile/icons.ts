@@ -33,6 +33,7 @@ import * as tablerAdjustmentsHorizontal from '@iconify/icons-tabler/adjustments-
 import * as tablerAlertCircle from '@iconify/icons-tabler/alert-circle';
 import * as tablerAlertTriangle from '@iconify/icons-tabler/alert-triangle';
 import * as tablerArrowLeft from '@iconify/icons-tabler/arrow-left';
+import * as tablerArrowsShuffle from '@iconify/icons-tabler/arrows-shuffle';
 import * as tablerBrandQq from '@iconify/icons-tabler/brand-qq';
 import * as tablerBrandWechat from '@iconify/icons-tabler/brand-wechat';
 import * as tablerCheck from '@iconify/icons-tabler/circle-check';
@@ -62,6 +63,8 @@ import * as tablerPlayerPlay from '@iconify/icons-tabler/player-play';
 import * as tablerPlus from '@iconify/icons-tabler/plus';
 import * as tablerQrcode from '@iconify/icons-tabler/qrcode';
 import * as tablerRefresh from '@iconify/icons-tabler/refresh';
+import * as tablerRepeat from '@iconify/icons-tabler/repeat';
+import * as tablerRepeatOnce from '@iconify/icons-tabler/repeat-once';
 import * as tablerSearch from '@iconify/icons-tabler/search';
 import * as tablerSettings from '@iconify/icons-tabler/settings';
 import * as tablerShield from '@iconify/icons-tabler/shield';
@@ -106,6 +109,7 @@ export const adjustmentsHorizontal = icon(tablerAdjustmentsHorizontal, 'adjustme
 export const alertCircle = icon(tablerAlertCircle, 'alert-circle');
 export const alertTriangle = icon(tablerAlertTriangle, 'alert-triangle');
 export const arrowLeft = icon(tablerArrowLeft, 'arrow-left');
+export const arrowsShuffle = icon(tablerArrowsShuffle, 'arrows-shuffle');
 export const brandQq = icon(tablerBrandQq, 'brand-qq');
 export const brandWechat = icon(tablerBrandWechat, 'brand-wechat');
 export const check = icon(tablerCheck, 'circle-check');
@@ -135,6 +139,8 @@ export const playerPlay = icon(tablerPlayerPlay, 'player-play');
 export const plus = icon(tablerPlus, 'plus');
 export const qrcode = icon(tablerQrcode, 'qrcode');
 export const refresh = icon(tablerRefresh, 'refresh');
+export const repeat = icon(tablerRepeat, 'repeat');
+export const repeatOnce = icon(tablerRepeatOnce, 'repeat-once');
 export const search = icon(tablerSearch, 'search');
 export const settings = icon(tablerSettings, 'settings');
 export const shield = icon(tablerShield, 'shield');
@@ -197,3 +203,8 @@ export const iconMicrophone = microphone;
 export const iconSparkles = sparkles;
 /** 评论（播放页功能行） */
 export const iconMessageCircle = messageCircle;
+
+/* ── 播放模式（用图标而不是文字） ── */
+export const iconRepeat = repeat;
+export const iconRepeatOnce = repeatOnce;
+export const iconShuffle = arrowsShuffle;
