@@ -21,37 +21,60 @@ const RES = path.join(ROOT, 'android/app/src/main/res');
 const ACCENT = '#00F5D4';
 const BACKDROP = '#171718';
 
-/** 音符本体。坐标来自用户提供的 SVG，另外补了左符头 —— 原稿只有右符头，
- *  两根符干共用一只符头看着像缺一块；补上后整体对称于画布中心 (54, 54)。 */
+/**
+ * 音符本体。坐标来自用户提供的 SVG。
+ *
+ * ⚠️ **只有一个符头，挂在右边**。不要"好心"补左边那个 —— 两根符干各挂一只符头
+ * 确实是常规画法（双八分音符），但用户的设计就是单符头；补上之后整体变成
+ * "两个圆夹一根竖杆"的形状，用户明确否掉了。
+ */
 const NOTE = `
-    <ellipse cx="38" cy="72" rx="10" ry="8"/>
     <ellipse cx="70" cy="72" rx="10" ry="8"/>
     <rect x="46" y="38" width="4" height="36" rx="2"/>
     <rect x="58" y="38" width="4" height="36" rx="2"/>
     <rect x="46" y="52" width="16" height="4" rx="2"/>
-    <path d="M50 38 Q58 30 66 38" stroke="${ACCENT}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
+    <!-- 顶部的弧：起点在左符干顶端，右端**比起点低 4**并向右探出右符干 6 —— 是钩形不是对称拱形 -->
 
-/** 内容包围盒约 52×50，中心 (54, 55)。scale 用来把内容放大到目标占比。 */
+    <path d="M48 38 Q58 28 66 42" stroke="${ACCENT}" stroke-width="4" fill="none" stroke-linecap="round"/>`;
+
+/**
+ * 内容包围盒与几何中心。
+ *
+ * 因为符头只在右边，内容**天然偏右**（x 46→80，中心在 63 而不是 54），
+ * 直接绕画布中心缩放会越缩越偏；所以先绕内容中心缩放，再把内容中心搬到画布中心。
+ *
+ * ⚠️ 纵向中心是 **56**，不要按“弧线顶点 y=30 再减描边”去算：
+ * `Q58 30 66 38` 里的 30 是**控制点**，不等于曲线顶点。二次贝塞尔在 t=0.5 处的
+ * 极值是 (38 + 2×30 + 38) / 4 = 34，再减掉描边半宽 2，上边才是 32；
+ * 下边是符头 72 + 8 = 80。所以纵向中心 (32 + 80) / 2 = 56。
+ * （按 54 生成的成品，像素包围盒实测整体偏下 3px。）
+ */
+const CONTENT_CENTER = { x: 63, y: 56 };
+
+/** scale 用来把内容放大到目标占比（见下面几个 icon() 的默认值）。 */
 const noteGroup = (scale) =>
-  `<g transform="translate(54 55) scale(${scale}) translate(-54 -55)" fill="${ACCENT}">${NOTE}</g>`;
+  `<g transform="translate(54 54) scale(${scale}) translate(${-CONTENT_CENTER.x} ${-CONTENT_CENTER.y})" fill="${ACCENT}">${NOTE}</g>`;
 
-/** 传统图标：内容占约 70% 边长 */
-const squareIcon = (scale = 1.4) =>
+/** 传统图标：内容占约 71%（实测；内容净高 32→80 = 48，×1.6 = 76.8 / 108） */
+const squareIcon = (scale = 1.6) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
   <rect width="108" height="108" fill="${BACKDROP}"/>
   ${noteGroup(scale)}
 </svg>`;
 
-/** 圆形图标：底也是圆的，四角透明 */
-const roundIcon = (scale = 1.4) =>
+/** 圆形图标：底也是圆的，四角透明（比例与方形一致，否则同一台机器上两种图标一大一小） */
+const roundIcon = (scale = 1.6) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
   <defs><clipPath id="c"><circle cx="54" cy="54" r="54"/></clipPath></defs>
   <circle cx="54" cy="54" r="54" fill="${BACKDROP}"/>
   <g clip-path="url(#c)">${noteGroup(scale)}</g>
 </svg>`;
 
-/** 自适应图标前景：透明底，内容收在中心 72×72 安全区内（放大过头会被 launcher 裁掉） */
-const foregroundIcon = (scale = 1.2) =>
+/**
+ * 自适应图标前景：透明底，内容必须收在中心 72×72 安全区内（超出部分会被 launcher 裁掉）。
+ * 1.4× → 净高 67.2，上下各留 20.4（安全区下限是 72/108 = 66.7%），已经是能用的上限。
+ */
+const foregroundIcon = (scale = 1.4) =>
   `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 108 108" width="108" height="108">
   ${noteGroup(scale)}
 </svg>`;
