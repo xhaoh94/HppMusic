@@ -11,9 +11,9 @@
 import { createRouter, createWebHashHistory } from 'vue-router';
 import {
   autoPlayAndOpenOnEnter,
-  claimAutoEnterOnce,
+  claimFirstEntry,
 } from '@mobile/composables/usePlaybackPrefs';
-import { ensureFreeListenReady } from '@mobile/adapters/freeListen';
+import { ensureFreeListenPlaying } from '@mobile/adapters/freeListen';
 import { pinia } from '@mobile/store';
 
 /**
@@ -207,7 +207,7 @@ router.beforeEach(async (to) => {
 });
 
 /**
- * 「进入随便听时自动播 + 进播放页」（**只在本次会话首次进入时**）。
+ * 「进入随便听时自动播 + 进播放页」。
  *
  * ## 为什么放在守卫里，而不是页面里做
  *
@@ -215,14 +215,16 @@ router.beforeEach(async (to) => {
  * 用户看到的是**列表闪一下再跳走**。放在守卫里就能在进入前直接改道，
  * 列表根本不渲染。
  *
- * ## 三道闸门，缺一个都会出问题
+ * ## 三道闸门
  *
  * 1. **开关** —— 用户没开就不该自动跳；
- * 2. **来源不是播放页** —— 从播放页返回时「没在播」同样成立（用户可能刚暂停），
- *    不看这个就会把人又弹回去，死活出不去；
- * 3. **一次性名额**（`claimAutoEnterOnce`）—— 切去别的页签再切回来时，
- *    前两条依然成立，于是又被弹进播放页并重新出声。
- *    认领过就作废，之后进入一律静默停在列表。
+ * 2. **来源不是播放页** —— 从播放页返回时用户要的就是看列表，
+ *    不改道才能正常退出去（否则"没在播"依然成立，会被弹回去）；
+ * 3. **是不是首次进入** —— 只影响"要不要接着放"，**不影响跳不跳**：
+ *    · 队列不存在/为空 → 必须拉歌开播（否则跳过去是个空页面）；
+ *    · 队列在、正在播 → 不打扰；
+ *    · 队列在、停着 → **首次**进入才接着放。之后切回来不续播，
+ *      因为那多半是用户自己按的暂停。
  *
  * 名额在「用户重新打开开关」时归还（见 usePlaybackPrefs）。
  *
@@ -231,10 +233,12 @@ router.beforeEach(async (to) => {
 router.beforeEach((to, from) => {
   if (to.name !== 'free-listen') return true;
   if (!autoPlayAndOpenOnEnter.value) return true;
+  // 从播放页返回 → 停在列表（这时要的是挑歌）
   if (from.name === 'player') return true;
-  if (!claimAutoEnterOnce()) return true;
 
   // 不 await：等它回来才放行的话，又变成"（空白）等一会儿再跳"，等于把延迟搬到别处。
-  void ensureFreeListenReady();
+  void ensureFreeListenPlaying(claimFirstEntry());
+
+  // 改道去播放页：**每次**都做
   return { name: 'player' };
 });

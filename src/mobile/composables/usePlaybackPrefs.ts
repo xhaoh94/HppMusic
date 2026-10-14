@@ -56,23 +56,27 @@ watch(
 );
 
 /**
- * 「进入列表页时自动播 + 打开播放页」在**本次会话里**是否已经触发过。
+ * 「本次会话是不是**第一次**进入歌曲列表页」。
  *
- * ## 为什么要这个名额
+ * ## 它只决定一件事：要不要"接着放"
  *
- * 需求是"**只有首次**进入才触发"。只看"现在没在播"是不够的：
- * 用户在播放页暂停 → 返回列表 → 切去别的页签 → 再切回来，
- * 这时"没在播"依然成立，于是又被弹进播放页、又重新出声 —— 死活回不到列表。
+ * 跳不跳播放页跟它无关 —— 那是**每次**进入都做的（用户要的就是"进频道就回播放页"）。
+ * 它管的只是：队列已就绪、但处于暂停态时，该不该自动续播。
  *
- * 所以用一个**一次性名额**：认领过就作废，后续进入一律静默停在列表页。
- * 名额是模块级变量，进程重启即归还 —— 也就是"每次冷启动后的第一次进入"。
+ * · 冷启动从 storage 恢复出来的队列通常就是暂停态，这时进频道确实是想听 —— 该接着放；
+ * · 但用户**自己按过暂停**后切走再切回来，"没在播"同样成立，
+ *   此时续播就是把人家刚按下的暂停顶掉，会变成"停不下来"。
+ *
+ * 这两种情形在状态上完全一样，只能靠"是不是第一次进入"区分。
+ *
+ * 名额是模块级变量，进程重启即归还；用户重新打开开关时也会归还（见下面 set 里的说明）。
  */
-let autoEnterConsumed = false;
+let firstEntryConsumed = false;
 
-/** 认领本次会话的「进入即自动播」名额。返回 true 表示这次由调用方触发。 */
-export const claimAutoEnterOnce = (): boolean => {
-  if (autoEnterConsumed) return false;
-  autoEnterConsumed = true;
+/** 认领"本次会话第一次进入"这个事实。返回 true 表示这就是第一次。 */
+export const claimFirstEntry = (): boolean => {
+  if (firstEntryConsumed) return false;
+  firstEntryConsumed = true;
   return true;
 };
 
@@ -84,7 +88,7 @@ export const autoPlayAndOpenOnEnter = computed({
      * 重新打开开关 = 用户又想要这个行为，把名额还回去。
      * 不还的话：用户关掉试一下、再打开，会发现"怎么没反应了" —— 名额在第一次就用掉了。
      */
-    if (value) autoEnterConsumed = false;
+    if (value) firstEntryConsumed = false;
     prefs.value = { ...prefs.value, autoPlayAndOpen: value };
   },
 });

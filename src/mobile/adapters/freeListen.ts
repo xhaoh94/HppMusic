@@ -82,23 +82,28 @@ export const isFreeListenQueueReady = (): boolean => {
 };
 
 /**
- * 确保随便听的**队列**就绪（**不碰播放状态**）。
+ * 确保随便听**在放**。
  *
- * ## 为什么不再"没在播就续播"
+ * @param resume 队列已就绪但暂停时，要不要接着放。
+ *   · 本次会话**首次**进入 → `true`（进这个频道就是想听）；
+ *   · 之后切回来 → `false`（那多半是用户自己按的暂停，顶掉它就成了"停不下来"）。
+ *   队列**根本不存在或为空**时不受它影响：那就必须拉一批并开播，
+ *   否则会跳到一个空播放页。
  *
- * 原来是：队列已就绪但暂停中 → `togglePlay()` 续播。于是"用户暂停 → 切走 → 切回来"
- * 会被强行出声 —— 用户要的是回列表看看，不是接着放。
- * 现在只在**队列还没建起来**（`isFreeListenQueueReady()` 为假）时才拉一批，
- * 那时确实没有可播的内容；队列已有内容就原样保留（可能在播、也可能暂停）。
- *
- * 起不起播、要不要改道去播放页，由调用方（路由守卫）自己决定。
+ * ⚠️ 别把队列就绪那条简化成直接 `return true`。冷启动从 storage 恢复出来的队列
+ * 就是"有歌但停着"的状态，漏掉它会出现：跳到播放页但**没有声音**，
+ * 播放键还停在"播放"（实测复现过）。
  */
-export const ensureFreeListenReady = async (): Promise<boolean> => {
+export const ensureFreeListenPlaying = async (resume = true): Promise<boolean> => {
   try {
-    if (isFreeListenQueueReady()) return true;
+    const player = usePlayerStore(pinia);
+    if (isFreeListenQueueReady()) {
+      if (resume && !player.isPlaying) await player.togglePlay();
+      return true;
+    }
     return await startFreeListenPlayback();
   } catch (error) {
-    logger.warn('FreeListen', 'Ensure ready failed', error);
+    logger.warn('FreeListen', 'Ensure playing failed', error);
     return false;
   }
 };

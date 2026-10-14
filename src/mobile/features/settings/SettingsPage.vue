@@ -167,7 +167,7 @@ onMounted(async () => {
         <SwitchRow
           v-model="autoPlayAndOpenOnEnter"
           label="进入页面时自动播"
-          description="仅本次会话首次切入随便听时触发；之后进入停在列表，不会打断你手动暂停"
+          description="切入随便听时自动播并打开播放页；之后进入也会回播放页，但不会顶掉你按下的暂停"
         />
         <SwitchRow
           v-model="openPlayerOnSelect"
