@@ -10,7 +10,7 @@ import { ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import Sheet from '@mobile/components/Sheet.vue';
-import { iconSettings } from '@mobile/icons';
+import { iconAdd } from '@mobile/icons';
 import {
   HOME_TAB_CATALOG,
   MAX_HOME_TABS,
@@ -68,7 +68,7 @@ const onReset = () => {
       aria-label="自定义页签"
       @click="editorOpen = true"
     >
-      <Icon :icon="iconSettings" width="19" height="19" />
+      <Icon :icon="iconAdd" width="19" height="19" />
     </button>
   </header>
 

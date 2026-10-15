@@ -203,6 +203,30 @@ export const clearAutoOpenedPlayerParent = (): void => {
 const ROOT_ROUTES = new Set(['home', 'loading', 'login', 'not-found']);
 
 /**
+ * 上一次停留的「主页分区」子页签路径。
+ *
+ * 底部「主页」按钮从别的分区（我的、独立的详情页…）回来时用它 —— 用户期望回到
+ * 自己刚才那个页签，而不是被永远丢回「发现」。只在主页分区内更新。
+ * 进程内记忆即可：重启后从「发现」开始是合理的。
+ */
+let lastHomeSectionPath = '';
+
+export const getLastHomeSectionPath = (): string => lastHomeSectionPath || '/main/home';
+
+/**
+ * 「回主页分区」这一趟不触发"进频道即播"。
+ *
+ * 进「随便听」的守卫会改道播放页并起播，那是"进入频道"的语义；但从「我的」点
+ * 「主页」回到刚才停留的列表只是**回退**，不该把播放页顶上来。一次性标记：
+ * 底部栏在导航前打上，守卫消费掉。只对「随便听」这个会自动改道的目标打标记。
+ */
+let suppressAutoOpenOnce = false;
+
+export const suppressNextHomeAutoOpen = (): void => {
+  suppressAutoOpenOnce = true;
+};
+
+/**
  * 返回上一级。返回 true = 已处理，原生不要再去问 WebView 历史、也不要退后台。
  *
  * ⚠️ 为什么不让原生用 `canGoBack()`：**vue-router 的 pushState 历史在 WebView 的
@@ -293,6 +317,11 @@ router.beforeEach(async (to) => {
 router.beforeEach((to, from) => {
   if (to.name !== 'free-listen') return true;
   if (!autoPlayAndOpenOnEnter.value) return true;
+  // 从「我的」经「主页」回到上次停留的列表：纯回退，不改道播放页
+  if (suppressAutoOpenOnce) {
+    suppressAutoOpenOnce = false;
+    return true;
+  }
   // 从播放页返回 → 停在列表（这时要的是挑歌）
   if (from.name === 'player') return true;
 
@@ -304,4 +333,14 @@ router.beforeEach((to, from) => {
 
   // 改道去播放页：**每次**都做
   return { name: 'player' };
+});
+
+/**
+ * 记住主页分区里停留过的页签路径。
+ *
+ * 用 afterEach：只在导航落地后记，拿到的是最终停留的那一页
+ * （被守卫改道去播放页时，落点是播放页，它没有 section，不会覆盖记忆）。
+ */
+router.afterEach((to) => {
+  if (to.meta.section === 'main') lastHomeSectionPath = to.path;
 });

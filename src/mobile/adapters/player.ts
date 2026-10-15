@@ -47,6 +47,12 @@ let bootstrapPromise: Promise<void> | null = null;
  * 整个过程放在启动页里做（而不是进主界面后异步跑），因为 `player.init()` 会
  * 注册 MediaSession 回调；晚注册意味着用户在系统通知栏按暂停会丢事件。
  */
+
+/** 「启动时自动播放」第一次尝试的延迟：等启动那批请求落定（见 bootstrapPlayer 内的说明） */
+const LAUNCH_RESUME_FIRST_DELAY_MS = 3000;
+/** 仍失败时的重试延迟（在第一次之后再加这么多） */
+const LAUNCH_RESUME_RETRY_MS = 5000;
+
 export const bootstrapPlayer = (): Promise<void> => {
   if (bootstrapPromise) return bootstrapPromise;
 
@@ -71,16 +77,78 @@ export const bootstrapPlayer = (): Promise<void> => {
      * 开关是内核 setting 的（autoPlayOnLaunch），桌面端由它的视图层读 ——
      * 移动端没有那一层，不在这里接就是个"能拨但没反应"的死开关
      * （实测：设置开着冷启动后原生媒体会话 state=0，什么都没放）。
+     *
+     * ⚠️ 取链失败要重试一次：启动瞬间首页会同时发一大批请求，取播放地址容易被
+     * 挤掉/超时（用户报的"启动时自动播放失败、同一首歌手动点又能播"就是这一种），
+     * 而失败会弹一次"无法获取可用音源"。隔几秒网络安静下来再试一次基本都能成功。
+     * 只在"还停在恢复出来的那首、且没在播"时重试，避免和用户手动播放打架。
      */
     if (
       useSettingStore().autoPlayOnLaunch &&
       playerStore.currentTrackId &&
       !playerStore.isPlaying
     ) {
-      // 不 await：取播放地址要一次网络往返，别拖住启动；失败只记日志
-      void Promise.resolve(playerStore.togglePlay()).catch((error) => {
-        logger.warn('MobilePlayer', 'Auto play on launch failed', error);
+      const resumeTrackId = String(playerStore.currentTrackId);
+      /**
+       * 把"恢复出来的曲目"长什么样记进日志。
+       *
+       * `hasAudioUrl` 是关键：曲目对象上带着上次会话的旧地址时，解析会走
+       * "复用当前源"分支，拿到的是过期 URL —— 这正是"启动续播失败、但手动点
+       * 同一首又能播"最可能的解释（手动播放用的是列表里的新对象，不带旧地址）。
+       */
+      const resumeSnapshot = playerStore.currentTrackSnapshot as Song | null;
+      logger.info('MobilePlayer', 'Launch resume attempt', {
+        trackId: resumeTrackId,
+        hash: String(resumeSnapshot?.hash ?? ''),
+        albumAudioId: String(
+          resumeSnapshot?.albumAudioId ?? resumeSnapshot?.mixSongId ?? '',
+        ),
+        hasAudioUrl: Boolean(resumeSnapshot?.audioUrl),
       });
+      /**
+       * ⚠️ 第一次尝试也必须等启动那批请求过去，不能立刻发。
+       *
+       * 实测（真机日志）：启动后立刻尝试 → 解析器在"取链"之前就返回空地址 ——
+       * 内核 `qualityAccessStore.captureAccessRequest()` 的序号被首页那批并发请求
+       * 顶掉，`isCurrentQualityAccess()` 判为过期，`resolver.ts:611` 直接
+       * `return { url: '' }`（所以日志里连一条取链请求都没有）。
+       * 后果是启动时稳定弹一次"播放失败"、3 秒后还会自动切歌。
+       * 等首页那批请求落定再试就正常 —— 同一个网络、同一首歌。
+       */
+      const resume = () => {
+        if (
+          playerStore.isPlaying ||
+          String(playerStore.currentTrackId ?? '') !== resumeTrackId
+        ) {
+          return;
+        }
+        // 不 await：取播放地址要一次网络往返，别拖住启动；失败只记日志
+        void Promise.resolve(playerStore.togglePlay()).catch((error) => {
+          logger.warn('MobilePlayer', 'Auto play on launch failed', error);
+        });
+      };
+
+      window.setTimeout(resume, LAUNCH_RESUME_FIRST_DELAY_MS);
+      window.setTimeout(() => {
+        resume();
+        /**
+         * 重试后仍没播起来 → 把关键状态写进日志。
+         *
+         * 这条是给"从设备上定位"用的：用户报的现象是启动续播失败、同一首歌手动
+         * 点又能播。有这几个字段就能判断是"曲目对象缺字段（hash/albumAudioId）"
+         * 还是"上游/网络拒绝"。
+         */
+        if (!playerStore.isPlaying) {
+          const snapshot = playerStore.currentTrackSnapshot as Song | null;
+          logger.warn('MobilePlayer', 'Auto play on launch still idle after retry', {
+            trackId: playerStore.currentTrackId,
+            hash: String(snapshot?.hash ?? ''),
+            albumAudioId: String(snapshot?.albumAudioId ?? snapshot?.mixSongId ?? ''),
+            hasAudioUrl: Boolean(snapshot?.audioUrl),
+            lastError: playerStore.lastError,
+          });
+        }
+      }, LAUNCH_RESUME_FIRST_DELAY_MS + LAUNCH_RESUME_RETRY_MS);
     }
   })().catch((error) => {
     // 失败不缓存：让下一次调用能重试（网络抖动导致的失败不该永久锁死播放）

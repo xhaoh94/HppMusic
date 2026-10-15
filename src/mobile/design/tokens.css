@@ -112,8 +112,9 @@
   --bg-overlay: #3d3d40;
   --bg-sheet: #343436;
   --bg-input: #3d3d40;
-  /* 底部导航栏：比页面暗一档，让内容区“浮”起来（参考产品同结构） */
-  --bg-bar: #111115;
+  /* 底部导航栏：与页面同底色 —— 三栏和内容连成一体（用户要求；参考产品是比页面
+     暗一档 + 分隔线，这里刻意偏离） */
+  --bg-bar: var(--bg-base);
 
   --text-primary: #ffffff;
   --text-secondary: #bcbcbc;
@@ -156,7 +157,7 @@
   --bg-overlay: #ffffff;
   --bg-sheet: #ffffff;
   --bg-input: #f0f0f4;
-  --bg-bar: #ffffff;
+  --bg-bar: var(--bg-base);
 
   --text-primary: #17171d;
   --text-secondary: #5f5f6b;

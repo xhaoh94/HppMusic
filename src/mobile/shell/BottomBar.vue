@@ -14,6 +14,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import { iconHome, iconMusic, iconProfile } from '@mobile/icons';
 import { useNowPlaying } from '@mobile/adapters/player';
+import { getLastHomeSectionPath, suppressNextHomeAutoOpen } from '@mobile/router';
 import { useToastStore } from '@/stores/toast';
 
 const route = useRoute();
@@ -28,6 +29,24 @@ const { hasTrack, isPlaying, coverUrl } = useNowPlaying();
 const go = (path: string) => {
   if (route.path === path) return;
   void router.push(path);
+};
+
+/**
+ * 「主页」按钮。
+ *
+ * 两条分支，区别在"用户当前在哪"：
+ * · 已经在主页分区里 → 回这一栏的根页（发现），与主流 App 的页签行为一致；
+ * · 从别的分区（我的、详情页…）回来 → 回到**上次停留的子页签**，
+ *   否则用户在「随便听」→「我的」→「主页」之后会被莫名丢回「发现」。
+ *
+ * ⚠️ 回到「随便听」时不触发"进频道即播"：这条路径是回退而不是进入频道，
+ * 不该把播放页顶上来（标记见 router 的 suppressNextHomeAutoOpen）。
+ */
+const goHomeSection = () => {
+  const target = isHomeSection.value ? '/main/home' : getLastHomeSectionPath();
+  if (route.path === target) return;
+  if (target === '/main/free-listen') suppressNextHomeAutoOpen();
+  void router.push(target);
 };
 
 /**
@@ -53,7 +72,7 @@ const openNowPlaying = () => {
       class="bar-item"
       :class="{ 'is-active': isHomeSection }"
       :aria-current="isHomeSection ? 'page' : undefined"
-      @click="go('/main/home')"
+      @click="goHomeSection"
     >
       <Icon :icon="iconHome" width="24" height="24" />
       <span class="bar-label">主页</span>
@@ -92,7 +111,7 @@ const openNowPlaying = () => {
   height: calc(var(--bottom-bar-height) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   background: var(--bg-bar);
-  border-top: 1px solid var(--divider);
+  /* 不画分隔线：与页面同底色 + 无分界线，三栏和内容才是"连在一起"的观感（用户要求） */
 }
 
 .bar-item {
@@ -132,7 +151,9 @@ const openNowPlaying = () => {
   width: 48px;
   height: 48px;
   flex: 0 0 48px;
-  margin: 0 var(--sp-2);
+  /* 上提 5px（居中时下外边距会把整个盒子往上推一半）：48px 的圆在 56px 的栏里
+     贴底边显得局促，抬起来一点更像"浮"着的唱片钮 */
+  margin: 0 var(--sp-2) 10px;
   border-radius: 50%;
   overflow: hidden;
   color: var(--text-tertiary);

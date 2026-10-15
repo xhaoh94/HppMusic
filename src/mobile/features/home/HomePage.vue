@@ -455,8 +455,14 @@ watch(activeCategoryId, () => void loadRecommended());
    * 但滑到底时最后一张能完全滑进屏幕，不会被内边距卡住。
    */
   margin: 0 calc(var(--sp-4) * -1);
-  /* 横向为主才响应横向拖拽，否则会和页面纵向滚动抢手势 */
-  touch-action: pan-x;
+  /*
+   * 横竖两个方向都交给浏览器按手势方向分派：横滑滚这一行，竖滑滚整个页面。
+   *
+   * ⚠️ 不能只写 `pan-x` —— 那个值的意思是"本元素**只**允许水平平移"，
+   * 于是竖着在卡片上滑不会滚页面（实测用户反馈"在这些内容上滑不动页面"）。
+   * `pan-x pan-y` 才是"两个方向都允许"。
+   */
+  touch-action: pan-x pan-y;
   scroll-snap-type: x proximity;
   scroll-padding-left: var(--sp-4);
 }

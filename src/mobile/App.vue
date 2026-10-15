@@ -16,7 +16,7 @@
  * 播放按钮没反应”。`bootstrapPlayer()` 是幂等的（内部缓存同一个 promise），
  * 启动页仍然 await 它以保证“进主界面前就绪”，这里只是兼底处理深链接路径。
  */
-import { onMounted } from 'vue';
+import { onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import AppShell from '@mobile/shell/AppShell.vue';
 import ToastHost from '@mobile/components/ToastHost.vue';
@@ -24,6 +24,7 @@ import VerificationSheet from '@mobile/components/VerificationSheet.vue';
 import AuthExpiredSheet from '@mobile/components/AuthExpiredSheet.vue';
 import { bootstrapPlayer } from '@mobile/adapters/player';
 import { useKeepScroll } from '@mobile/composables/useKeepScroll';
+import { usePlayerStore } from '@/stores/player';
 import logger from '@/utils/logger';
 
 const route = useRoute();
@@ -31,6 +32,26 @@ const router = useRouter();
 
 // 记/恢复各页面的滚动位置（KeepAlive 只保组件状态，保不住 scrollTop）
 useKeepScroll(router);
+
+/**
+ * 把播放失败提示记进日志。
+ *
+ * 内核那条提示本身**不写任何日志**（`showPlaybackNotice` 只写状态，toast 也不打日志），
+ * 于是设备上出现"播放失败"时，logcat 里看不到任何原因 —— 排查启动续播失败就卡在这里。
+ * 移动端补这一条，把 code / reason / trackId 落到 logcat。
+ */
+watch(
+  () => usePlayerStore().playbackNotice,
+  (notice) => {
+    if (!notice) return;
+    logger.warn('MobilePlayer', 'Playback notice', {
+      code: notice.code,
+      title: notice.title,
+      reason: notice.reason,
+      trackId: notice.trackId,
+    });
+  },
+);
 
 /**
  * 走 KeepAlive 的页面名（对应各页 `defineOptions({ name })`）。
