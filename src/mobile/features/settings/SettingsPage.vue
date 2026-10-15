@@ -16,9 +16,12 @@
  * 核对方式（加新项前请照做）：
  *   grep -rn "settingStore\.<字段名>" src/renderer/stores src/renderer/utils
  * 有命中才写上来。本轮核对结果：
- *   有读取方 → autoPlayOnLaunch / volumeFade(+Time) / seekForward|BackwardOffset /
+ *   有读取方 → autoPlayOnLaunch / volumeFade(+Time) /
  *              autoNext(+Delay/MaxAttempts) / defaultAudioQuality /
  *              volumeNormalization(+Lufs) / lyricFilterEnabled(+Pattern)
+ *   grep 有命中但移动端是死链（已排除）→ seekForward|BackwardOffset：
+ *              EchoPlaybackService.updateSkipIntervals 是空实现，通知栏
+ *              MediaSession 也没声明 FAST_FORWARD/REWIND，两个 handler 永不触发
  *   没有读取方（已排除）→ autoPlay / playbackQueueMode / showAudioQualityBadge /
  *              preventSleep / cache* / proxy* / dpi* / shortcut* / window*
  * ══════════════════════════════════════════════════════════════
@@ -56,9 +59,6 @@ const themeValue = computed({
   get: () => themePreference.value,
   set: (value: string | number) => setThemePreference(value as ThemePreference),
 });
-
-/* ── 播放 ── */
-const seekOptions = [1, 3, 5, 10, 15, 30].map((value) => ({ value, label: `${value}秒` }));
 
 /* ── 音质 ── */
 /** 标签沿用上游 QualityPopover 的叫法，避免同一个音质在两处叫不同名字 */
@@ -174,16 +174,6 @@ onMounted(async () => {
           label="点歌后进播放页"
           description="在列表里点一首歌后直接打开播放页；关着则留在列表方便连试"
         />
-        <SegmentedRow
-          v-model="setting.seekForwardOffset"
-          label="快进步长"
-          :options="seekOptions"
-        />
-        <SegmentedRow
-          v-model="setting.seekBackwardOffset"
-          label="快退步长"
-          :options="seekOptions"
-        />
       </SettingsSection>
 
       <SettingsSection
@@ -213,6 +203,19 @@ onMounted(async () => {
 
       <SettingsSection title="歌词">
         <SegmentedRow v-model="lyricScale" label="歌词字号" :options="lyricScaleOptions" />
+        <!-- 翻译/音译：写的是内核 lyric store 的 wantTranslation/wantRomanization
+             （在 persist pick 列表里，切歌不重置）。store 的 lyricsMode 会自动按
+             "用户意图 × 这首歌有没有译文" 推导，没有译文时开了也不显示副行。 -->
+        <SwitchRow
+          v-model="lyric.wantTranslation"
+          label="显示翻译"
+          description="有译文时显示在原文下方"
+        />
+        <SwitchRow
+          v-model="lyric.wantRomanization"
+          label="显示音译"
+          description="日韩等歌曲显示罗马音"
+        />
         <SegmentedRow
           v-model="conversionMode"
           label="简繁转换"

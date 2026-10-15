@@ -118,10 +118,10 @@ const LEGACY_INK_RATIO = 0.72;
 /**
  * 自适应前景：只显示中心 72×72，而且 launcher 会把这 72dp **放大**到图标实际尺寸。
  *
- * 用户反馈过"太小" —— 这个比例才是桌面上真正看到的，别按画布比例去估。
- * 0.94 × 72 = 67.7，靠安全区内切；再大就会顶到遮罩。
+ * 按 Android 规范，图形必须收在中心 66dp 的保证可见圆内（厂商遮罩比规范更激进，
+ * 圆外内容会被切）。0.75 × 72 = 54dp，四边各留约 6dp，与主流应用的图标体量一致。
  */
-const FOREGROUND_INK_RATIO = 0.94;
+const FOREGROUND_INK_RATIO = 0.75;
 
 const CANVAS = 108;
 const SAFE = 72;

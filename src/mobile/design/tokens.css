@@ -119,6 +119,9 @@
   --text-secondary: #bcbcbc;
   --text-tertiary: #8a8a8c;
   --text-inverse: #171718;
+  /* 歌词暗行/未唱字：酷狗概念版截屏采样 #646464，比 tertiary 再暗一档，
+     当前行纯白与它的对比才够"卡拉OK" */
+  --lyric-dim: #646464;
 
   /* 底色变亮后，同样的白色百分比会显得更淡，所以比原来略提高一点 */
   --divider: rgba(255, 255, 255, 0.1);
@@ -159,6 +162,7 @@
   --text-secondary: #5f5f6b;
   --text-tertiary: #8f8f9c;
   --text-inverse: #ffffff;
+  --lyric-dim: #a8a8b4;
 
   --divider: rgba(0, 0, 0, 0.08);
   --divider-strong: rgba(0, 0, 0, 0.16);

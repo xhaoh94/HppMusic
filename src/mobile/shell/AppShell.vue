@@ -27,6 +27,9 @@
  *
  * 所以在内容区统一垫一次，带子页签时抵消掉 —— 不能逐个去给 PageHeader 加：
  * 那要改 13 个页面的顶栏，漏一个就静默错位，而这里一处就覆盖全站。
+ *
+ * 全屏页（`meta.shell === false`：播放/登录/启动/404）除外 —— 它们自己吃
+ * 安全区，外壳再垫就是双重留白，播放页顶部还会因此露出一条外壳底色带。
  */
 import { computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
@@ -58,7 +61,10 @@ onMounted(() => {
   <div class="shell">
     <SubTabBar v-if="subTabVisible" />
 
-    <main class="shell-content" :class="{ 'has-sub-tabs': subTabVisible }">
+    <main
+      class="shell-content"
+      :class="{ 'has-sub-tabs': subTabVisible, 'is-fullscreen': !shellVisible }"
+    >
       <slot />
     </main>
 
@@ -94,6 +100,13 @@ onMounted(() => {
 
 /* 子页签栏已经喫过 --safe-top 了，再垫一次就是双倍留白 */
 .shell-content.has-sub-tabs {
+  padding-top: 0;
+}
+
+/* 全屏页（播放/登录/启动/404，meta.shell === false）自己吃安全区。外壳再垫一次
+   就是双重留白 —— 播放页顶部还会露出一条外壳底色带：它的背景是自己画的满铺图，
+   铺不到 padding 那条 strip 里。 */
+.shell-content.is-fullscreen {
   padding-top: 0;
 }
 </style>

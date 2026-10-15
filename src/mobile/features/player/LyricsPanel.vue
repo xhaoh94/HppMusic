@@ -25,7 +25,7 @@
  *
  * 渲染用 `displayLines`（已过用户配置的过滤/简繁转换，且与 currentIndex 对齐）。
  */
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type { LyricLine } from '@/stores/lyric';
 import { useLyrics } from '@mobile/adapters/player';
 
@@ -69,7 +69,12 @@ const visualIndex = computed(() => {
 /** 用户操作后暂停自动滚动到这个时间点 */
 const USER_SCROLL_PAUSE_MS = 3500;
 const userScrollUntil = ref(0);
-const autoScrollPaused = computed(() => Date.now() < userScrollUntil.value);
+/**
+ * 必须是函数，不能是 computed：computed 的依赖里没有时间源，过期后不会重新求值，
+ * 会把 true 一直缓存下去 —— 用户碰一次歌词区，自动滚动就永久死亡
+ * （实测现象：歌词不再跟随播放滚动）。函数每次判断都读当前时间，到期自动恢复。
+ */
+const autoScrollPaused = () => Date.now() < userScrollUntil.value;
 
 const noteUserScroll = () => {
   userScrollUntil.value = Date.now() + USER_SCROLL_PAUSE_MS;
@@ -79,40 +84,63 @@ const setLineRef = (element: Element | null, index: number) => {
   lineElements.value[index] = (element as HTMLElement | null) ?? null;
 };
 
-const positionSec = computed(() => props.positionMs / 1000);
-
 /**
  * 当前行的逐字进度。
  *
  * 只返回"已经唱到第几个字"，而不是给每个字算一次时间 ——
  * 这样每帧只重算一个整数，配合下面的 `v-for` 就能让 Vue 只改动变化的那一两个 class。
+ *
+ * ⚠️ `characters[].startTime` 是**毫秒**（KRC 的原始单位，见 stores/lyric.ts 的解析），
+ * 必须和 `props.positionMs` 比。拿 `positionMs / 1000` 去比是单位错位 ——
+ * 逐字进度会永远停在 0，当前行整行保持暗灰（实测现象：看着像"高亮后字色又被改回灰"）。
  */
+let progressLine = -1;
+let progressMax = 0;
+let progressPeakMs = 0;
+
 const activeCharCount = computed(() => {
   // 没在播放（或还没开始）时不做逐字高亮：整行走普通文本，视觉上更安静
   if (currentIndex.value < 0) return -1;
-  const line: LyricLine | undefined = lines.value[currentIndex.value];
+  const index = currentIndex.value;
+  const line: LyricLine | undefined = lines.value[index];
   if (!line?.characters?.length) return -1;
+
   let count = 0;
   for (const character of line.characters) {
-    if (Number(character.startTime) <= positionSec.value) count += 1;
+    if (Number(character.startTime) <= props.positionMs) count += 1;
     else break;
   }
-  return count;
+
+  // 只增不减：平滑时钟每次与 store 同步都会把外推值往回拉一点，没有这个下界，
+  // 唱过的字会随每次同步闪回灰色。倒退超过 2 秒才算用户 seek，那时才重置。
+  const jumpedBack = props.positionMs < progressPeakMs - 2000;
+  if (index !== progressLine || jumpedBack) {
+    progressLine = index;
+    progressMax = 0;
+    progressPeakMs = props.positionMs;
+  }
+  if (count > progressMax) progressMax = count;
+  if (props.positionMs > progressPeakMs) progressPeakMs = props.positionMs;
+  return progressMax;
 });
 
 const centerCurrentLine = (behavior: ScrollBehavior = 'smooth') => {
   const container = scroller.value;
   const element = lineElements.value[visualIndex.value];
   if (!container || !element) return;
+  // 用视口坐标差算偏移，不用 offsetTop：.lyrics 没设 position，offsetParent 是
+  // .player-stage，offsetTop 会把封面/歌名区的高度算进来 —— 封面模式下当前行
+  // 被顶出可见区（歌词模式误差小所以没暴露）。rect 差值与 offsetParent 无关。
+  const delta = element.getBoundingClientRect().top - container.getBoundingClientRect().top;
   const target =
-    element.offsetTop - container.clientHeight / 2 + element.clientHeight / 2;
+    container.scrollTop + delta - (container.clientHeight - element.clientHeight) / 2;
   container.scrollTo({ top: Math.max(0, target), behavior });
 };
 
 watch(
   () => visualIndex.value,
   async () => {
-    if (!props.active || autoScrollPaused.value) return;
+    if (!props.active || autoScrollPaused()) return;
     // 等 DOM 更新完再量 offsetTop：行高会随字号/译文行数变化
     await nextTick();
     centerCurrentLine();
@@ -130,7 +158,9 @@ watch(
 );
 
 watch(
-  () => lines.value.length,
+  // 监听数组本身而不是 length：换一首行数相同的歌时 length 不变，
+  // 不重新对齐就会停在上一首歌的滚动位置
+  () => lines.value,
   async () => {
     if (!props.active) return;
     await nextTick();
@@ -139,7 +169,26 @@ watch(
   },
 );
 
+/**
+ * 容器尺寸变化后重新对齐。
+ *
+ * 封面模式下歌词区只剩一两百像素高，切视图模式、改字号、封面加载后撑开布局，
+ * 都会让中心悄悄偏掉 —— 而这些变化不改变任何被 watch 的值，行高变了、
+ * currentIndex 没变，就没人去重新居中。ResizeObserver 兜住这一类。
+ * 用户正在手动滚动期间不抢（autoScrollPaused）。
+ */
+let resizeObserver: ResizeObserver | null = null;
+onMounted(() => {
+  if (!scroller.value || typeof ResizeObserver === 'undefined') return;
+  resizeObserver = new ResizeObserver(() => {
+    if (!props.active || autoScrollPaused()) return;
+    centerCurrentLine('auto');
+  });
+  resizeObserver.observe(scroller.value);
+});
+
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect();
   if (userScrollTimer !== null) window.clearTimeout(userScrollTimer);
 });
 
@@ -180,10 +229,7 @@ const lineText = (line: LyricLine) => line.text || '♪';
         :key="`${index}-${line.time}`"
         :ref="(element) => setLineRef(element as Element | null, index)"
         class="line"
-        :class="{
-          'is-active': index === visualIndex,
-          'is-near': Math.abs(index - visualIndex) === 1,
-        }"
+        :class="{ 'is-active': index === visualIndex }"
         role="button"
         tabindex="0"
         @click="seekToLine(index)"
@@ -269,7 +315,8 @@ const lineText = (line: LyricLine) => line.text || '♪';
      用 CSS 变量下发，避免每行都算一遍内联样式 */
   font-size: calc(var(--font-lg) * var(--lyric-scale, 1));
   line-height: 1.5;
-  color: var(--text-tertiary);
+  /* 暗行灰：酷狗概念版截屏采样 #646464，比 tertiary 再暗一档 */
+  color: var(--lyric-dim);
   text-align: center;
   transition:
     color var(--duration-normal) var(--ease-standard),
@@ -279,11 +326,11 @@ const lineText = (line: LyricLine) => line.text || '♪';
   -webkit-user-select: none;
 }
 
-/* 相邻行稍微亮一点：让视线有落点，但不抢当前行 */
-.line.is-near {
-  color: var(--text-secondary);
-}
+/* 注：没有"相邻行加亮"——当前行逐字还没唱到时整行是暗的，邻居一旦更亮，
+   看起来就像高亮跑到了两行上（实测踩过）。酷狗概念版也是所有非当前行同一种灰。 */
 
+/* 当前行：无底带，聚焦全靠"唱到的字纯白 + 字号大一级"——酷狗概念版同款，
+   截图采样：唱到 #FFF / 未唱 #646464 / 非当前行 #646464 */
 .line.is-active {
   color: var(--text-primary);
   font-size: calc(var(--font-xl) * var(--lyric-scale, 1));
@@ -296,6 +343,12 @@ const lineText = (line: LyricLine) => line.text || '♪';
   margin-top: var(--sp-1);
   font-size: var(--font-sm);
   font-weight: var(--weight-regular);
+  /* 副行（翻译/音译）跟随暗行的灰，不能比原词还亮 */
+  color: var(--lyric-dim);
+}
+
+/* 当前行的译文比纯白稍暗，保持层级 */
+.line.is-active .line-sub {
   color: var(--text-secondary);
 }
 
@@ -305,12 +358,12 @@ const lineText = (line: LyricLine) => line.text || '♪';
   transition: color 120ms linear;
 }
 
+/* 逐字高亮：未唱到的字与普通行同灰，正在唱到的亮 */
 .line.is-active .char {
-  /* 未唱到的字压在中等亮度上，正在唱的才给高亮色 */
-  color: var(--text-secondary);
+  color: var(--lyric-dim);
 }
 
 .line.is-active .char.is-played {
-  color: var(--accent);
+  color: var(--text-primary);
 }
 </style>

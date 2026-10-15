@@ -47,7 +47,6 @@ import CommentSheet from './CommentSheet.vue';
 import BarrageLayer from './BarrageLayer.vue';
 import {
   formatTime,
-  useLyrics,
   useNowPlaying,
   usePlayModeSwitcher,
   usePlaybackActions,
@@ -91,7 +90,6 @@ const {
   toggleFavorite,
 } = usePlaybackActions();
 const { cycle: cyclePlayMode, current: playMode, label: playModeLabel } = usePlayModeSwitcher();
-const { currentIndex: lyricIndex, lines: lyricLines } = useLyrics();
 
 /** 帧级外推的位置：进度条与歌词逐字都靠它，避免采样值一顿一顿 */
 const { positionMs, durationMs, start: startClock, stop: stopClock } = useSmoothPosition();
@@ -197,13 +195,6 @@ const onProgressCommit = (value: number) => {
   void seek(value / 1000);
 };
 
-/** 封面模式下方显示的当前行歌词 */
-const currentLine = computed(() => {
-  const index = lyricIndex.value;
-  if (index < 0) return '';
-  return lyricLines.value[index]?.text ?? '';
-});
-
 /* ── 功能行 ── */
 const onToggleFavorite = async () => {
   const song = track.value;
@@ -278,13 +269,7 @@ onBeforeUnmount(() => {
       <BarrageLayer v-if="barrageHash" :hash="barrageHash" :playing="isPlaying" />
 
       <!-- 封面（仅封面模式） -->
-      <CoverPanel
-        v-if="showCover"
-        :track="track"
-        :current-line="currentLine"
-        :playing="isPlaying"
-        @click="cycleSkin"
-      />
+      <CoverPanel v-if="showCover" :track="track" :playing="isPlaying" @click="cycleSkin" />
 
       <!-- 歌名 / 歌手：三种模式都显示（旧项目也是常驻） -->
       <div class="track-info">
@@ -623,11 +608,16 @@ onBeforeUnmount(() => {
   text-shadow: 0 1px 8px rgba(0, 0, 0, 0.55);
 }
 
-.is-portrait .lyrics-area :deep(.line.is-near) {
-  color: rgba(255, 255, 255, 0.75);
+.is-portrait .lyrics-area :deep(.line.is-active) {
+  color: #fff;
 }
 
-.is-portrait .lyrics-area :deep(.line.is-active) {
+/* 写真底上的逐字：未唱字压暗、唱到字纯白（酷狗同款，无底带） */
+.is-portrait .lyrics-area :deep(.line.is-active .char) {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.is-portrait .lyrics-area :deep(.line.is-active .char.is-played) {
   color: #fff;
 }
 

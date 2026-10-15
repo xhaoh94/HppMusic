@@ -14,8 +14,8 @@
  * · 「进入页面时自动播」—— 进来就是"开始听"，所以自动放第一首并打开播放页；
  * · 「点歌后进播放页」—— 在列表里挑歌，挑了就走。
  *
- * 默认都关：进页面就开始出声、或者点一下就离开列表，都属于"用户没要求却发生"的行为，
- * 不该默认打开（要留给用户自己选）。
+ * 默认：「进入页面时自动播」开（进频道即听，是产品要的行为），
+ * 「点歌后进播放页」关（点一下就离开列表属于"用户没要求却发生"，留给用户自己选）。
  */
 import { computed, ref, watch } from 'vue';
 
@@ -28,14 +28,16 @@ interface PlaybackPrefs {
   openOnSelect: boolean;
 }
 
-const DEFAULTS: PlaybackPrefs = { autoPlayAndOpen: false, openOnSelect: false };
+const DEFAULTS: PlaybackPrefs = { autoPlayAndOpen: true, openOnSelect: false };
 
 const read = (): PlaybackPrefs => {
   if (typeof localStorage === 'undefined') return { ...DEFAULTS };
   try {
     const raw = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}') as Partial<PlaybackPrefs>;
     return {
-      autoPlayAndOpen: raw.autoPlayAndOpen === true,
+      // 与 openOnSelect 不同：这一项**缺省即开**。老存储里没有这个字段、
+      // 或者首次运行，都要落到默认值 true；只有用户明确关过（存了 false）才关。
+      autoPlayAndOpen: raw.autoPlayAndOpen !== false,
       openOnSelect: raw.openOnSelect === true,
     };
   } catch {
