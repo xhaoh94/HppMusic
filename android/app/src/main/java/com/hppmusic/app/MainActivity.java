@@ -2,6 +2,7 @@ package com.hppmusic.app;
 
 import android.os.Bundle;
 import android.view.View;
+import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
 
 import androidx.core.graphics.Insets;
@@ -12,6 +13,14 @@ import androidx.core.view.WindowInsetsCompat;
 import com.getcapacitor.BridgeActivity;
 
 public class MainActivity extends BridgeActivity {
+
+    /**
+     * 最近一次拿到的系统栏 insets。
+     *
+     * 缓存下来是为了让 WebView 侧能**随时**查到当前值：注入时机不可靠
+     * （见 injectSafeAreaInsets 的说明），前端需要一个同步的读取入口。
+     */
+    private Insets lastInsets = Insets.NONE;
     @Override
     public void onCreate(Bundle savedInstanceState) {
         // 三个自定义插件必须在 super.onCreate 之前注册：BridgeActivity 在 super 里
@@ -36,11 +45,33 @@ public class MainActivity extends BridgeActivity {
         ViewCompat.setOnApplyWindowInsetsListener(decor, (view, windowInsets) -> {
             Insets bars = windowInsets.getInsets(
                     WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            lastInsets = bars;
             injectSafeAreaInsets(bars);
             return windowInsets;
         });
         // 监听器只在下一次 insets 变化时回调，主动请求一次拿到初始值
         ViewCompat.requestApplyInsets(decor);
+
+        // 给 WebView 侧一个同步查询入口。
+        // 上面那次注入多半打在还没加载页面的 WebView 上（JS 跑在 about:blank），
+        // 页面一加载就丢了 —— 实测重启 App 后 --safe-area-inset-top 直接不存在，
+        // 顶部被状态栏盖住。前端启动时会调这里的 getInsets() 补一次。
+        WebView webView = bridge == null ? null : bridge.getWebView();
+        if (webView != null) {
+            webView.addJavascriptInterface(new SafeAreaQuery(), "HppSafeArea");
+        }
+    }
+
+    /** 供前端查询系统栏 insets（单位 dp，对应 CSS 的 px） */
+    private final class SafeAreaQuery {
+        @JavascriptInterface
+        public String getInsets() {
+            final float density = getResources().getDisplayMetrics().density;
+            return "{\"top\":" + Math.round(lastInsets.top / density)
+                    + ",\"bottom\":" + Math.round(lastInsets.bottom / density)
+                    + ",\"left\":" + Math.round(lastInsets.left / density)
+                    + ",\"right\":" + Math.round(lastInsets.right / density) + "}";
+        }
     }
 
     /**

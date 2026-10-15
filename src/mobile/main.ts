@@ -35,6 +35,7 @@ import '@mobile/design/tokens.css';
 
 import { initApiBridge } from '@bridge/apiBridge';
 import { initBackButtonHook } from '@bridge/backButton';
+import { applySafeAreaInsets } from '@bridge/safeArea';
 
 /** 桥必须在下面任何一个 await import 之前挂好 */
 const bridge = initApiBridge({ version: __APP_VERSION__ });
@@ -42,6 +43,10 @@ const bridge = initApiBridge({ version: __APP_VERSION__ });
 // 返回键钩子尽早装：原生 onBackPressed 随时可能 eval 它（首帧启动页也会）。
 // 具体消费方（浮层 / 播放页）由各组件在挂载时注册。
 initBackButtonHook();
+
+// 安全区：原生在 onCreate 时注入的那次往往打在还没加载页面的 WebView 上，
+// 页面一加载就丢了。这里主动查一次把 --safe-area-inset-* 补上。
+applySafeAreaInsets();
 
 const [{ pinia }, { default: App }, { router }] = await Promise.all([
   import('@mobile/store'),
