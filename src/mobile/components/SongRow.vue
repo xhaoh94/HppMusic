@@ -11,6 +11,7 @@ import { computed } from 'vue';
 import { Icon } from '@iconify/vue';
 import { iconMusic } from '@mobile/icons';
 import { songKeyOf } from '@mobile/utils/songKey';
+import { getSongDerivedState } from '@/utils/song';
 import type { Song } from '@/models/song';
 
 const props = withDefaults(
@@ -35,6 +36,18 @@ const emit = defineEmits<{ select: [song: Song]; longpress: [song: Song] }>();
 
 const cover = computed(() => props.song.coverUrl || props.song.cover || '');
 const artist = computed(() => props.song.artist || props.song.albumName || '未知歌手');
+
+/**
+ * 音质 / 特权标签。
+ *
+ * 不在这里自己判 `payType`、`privilege`、`relateGoods`：内核的 `getSongDerivedState`
+ * 已经把这套规则收好了 —— `qualityTag` 按 relateGoods 里有没有 flac/320/high 得出
+ * SQ / HQ / Hi-Res，`privilegeTags` 按 privilege + payType 得出 付费 / VIP / 版权 / 音源。
+ * 这里只负责渲染，规则漂移（上游改字段含义）只需要改内核那一份。
+ */
+const derived = computed(() => getSongDerivedState(props.song));
+const qualityTag = computed(() => derived.value.qualityTag);
+const privilegeTags = computed(() => derived.value.privilegeTags);
 const durationText = computed(() => {
   /**
    * ⚠️ `song.duration` 的单位是**秒**（上游 `formatDuration(seconds)` 为此）。
@@ -106,7 +119,17 @@ const onClick = () => {
     </div>
 
     <div class="song-meta">
-      <p class="song-title ellipsis">{{ song.title || song.name || '未知歌曲' }}</p>
+      <div class="song-title-row">
+        <p class="song-title ellipsis">{{ song.title || song.name || '未知歌曲' }}</p>
+        <span
+          v-for="tag in privilegeTags"
+          :key="tag.label"
+          class="song-tag"
+          :style="{ '--tag-color': tag.color }"
+          >{{ tag.label }}</span
+        >
+        <span v-if="qualityTag" class="song-tag is-quality">{{ qualityTag }}</span>
+      </div>
       <p class="song-artist ellipsis">{{ artist }}</p>
     </div>
 
@@ -168,10 +191,42 @@ const onClick = () => {
   gap: 2px;
 }
 
+.song-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  /* 不写 min-width: 0 的话标题的 ellipsis 不生效，长标题会把标签顶出屏幕 */
+  min-width: 0;
+}
+
 .song-title {
+  flex: 1;
+  min-width: 0;
   margin: 0;
   font-size: var(--font-md);
   color: var(--text-primary);
+}
+
+/*
+ * 标签只用「描边 + 同色文字」，不填色：
+ * 一屏里可能有十几个标签，实心色块会把歌名压下去。
+ * 颜色用 CSS 变量从标签数据里带进来（--tag-color: XX）。
+ */
+.song-tag {
+  flex: 0 0 auto;
+  padding: 0 3px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  font-size: 9px;
+  line-height: 12px;
+  font-weight: var(--weight-semibold);
+  color: var(--tag-color, var(--text-tertiary));
+  letter-spacing: 0.02em;
+}
+
+/* 音质标签固定青色，与特权标签（各自带色）区分开 */
+.song-tag.is-quality {
+  --tag-color: #06b6d4;
 }
 
 .song-row.is-active .song-title {
