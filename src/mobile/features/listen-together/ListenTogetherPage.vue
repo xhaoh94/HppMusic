@@ -91,6 +91,17 @@ const refresh = async () => {
   toast.info(count ? `已刷新，共 ${count} 个房间` : '已刷新，暂时没有开放的房间');
 };
 
+/**
+ * 加载下一页。
+ *
+ * ⚠️ **上游这个推荐接口目前不分页**，所以实际上拿不到新房间：抓包确认
+ * page=0 与 page=1 返回的是完全相同的一批房间，且 `is_end` 恒为 0
+ * （内核传参没问题：page 从 1 开始，API 层转成 0-based）。
+ *
+ * 也就是说 `roomsEnded` 会一直是 false、这里会一直"还有更多"。
+ * 之所以**保留**这段分页逻辑而不是删掉：store 里的 roomsPage / pageInfo.ended
+ * 是真的，一旦上游把接口补上，这里不用改代码就会开始工作。
+ */
 const loadMore = () => {
   if (room.roomsEnded || room.loadingRooms) return;
   void load(false);
