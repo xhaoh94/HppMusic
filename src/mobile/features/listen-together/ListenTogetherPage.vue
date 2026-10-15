@@ -20,7 +20,7 @@
  * 上游这个功能是**心跳轮询**实现的（`heartbeatListenTogetherRoom` + setInterval），
  * 不依赖 WebSocket —— 所以 WebView 里直接可用，不需要原生补通道。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
@@ -95,6 +95,34 @@ const loadMore = () => {
   if (room.roomsEnded || room.loadingRooms) return;
   void load(false);
 };
+
+/**
+ * 列表到底自动加载。
+ *
+ * 原来是个「加载更多」按钮。加了列表头的手动刷新之后，那个按钮既占一行位置，
+ * 又容易和刷新混淆（看起来像"刷新"之外多出来的一个重复入口）。
+ *
+ * ⚠️ 但**分页本身是真的**（store 里有 roomsPage / pageInfo.ended），不能直接删 ——
+ * 删掉就再也翻不到后面的房间了。所以改成本模式的自动加载。
+ *
+ * 用哨兵 + IntersectionObserver 而不是监听 scroll：scroll 每帧都触发，
+ * 要自己做节流和"到底了没"的几何计算。与 useInfiniteList 同一套做法。
+ * 用 watch(sentinel) 而不是 onMounted：哨兵受 v-if 控制，挂载时机不确定。
+ */
+const loadSentinel = ref<HTMLElement | null>(null);
+
+watch(loadSentinel, (element, _previous, onCleanup) => {
+  if (!element || typeof IntersectionObserver === 'undefined') return;
+  const observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) loadMore();
+    },
+    // 留一屏余量，滚到底时内容已经在了
+    { rootMargin: '240px' },
+  );
+  observer.observe(element);
+  onCleanup(() => observer.disconnect());
+});
 
 const openPreview = async (target: { id: string; roomType: number }) => {
   previewOpen.value = true;
@@ -461,15 +489,10 @@ const goBackToList = () => {
               @select="openPreview(item)"
             />
           </div>
-          <button
-            v-if="!room.roomsEnded"
-            type="button"
-            class="load-more"
-            :disabled="room.loadingRooms"
-            @click="loadMore"
-          >
-            {{ room.loadingRooms ? '加载中…' : '加载更多' }}
-          </button>
+          <!-- 滚到底自动加载，不再放按钮（见 loadSentinel 的说明） -->
+          <div v-if="!room.roomsEnded" ref="loadSentinel" class="load-sentinel">
+            <span v-if="room.loadingRooms" class="load-hint">加载中…</span>
+          </div>
           <p v-else class="list-end">没有更多房间了</p>
         </template>
       </div>
@@ -757,15 +780,22 @@ const goBackToList = () => {
   padding: var(--sp-2) var(--sp-4);
 }
 
-.load-more {
-  display: block;
-  width: calc(100% - 32px);
-  margin: var(--sp-4) auto 0;
-  min-height: 46px;
-  border-radius: var(--radius-md);
-  font-size: var(--font-md);
-  color: var(--text-secondary);
-  background: var(--fill-subtle);
+/*
+ * 自动加载的哨兵。
+ * 必须给高度：IntersectionObserver 观察的是元素本身，高度为 0 时
+ * 它可能在滚到底之前就"已经相交"，也可能永远不相交 —— 两种都会出问题。
+ */
+.load-sentinel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 48px;
+  margin-top: var(--sp-2);
+}
+
+.load-hint {
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
 }
 
 .list-end {
