@@ -105,7 +105,9 @@ const METHODS: LoginMethodMeta[] = [
   },
 ];
 
-const method = ref<LoginMethod>('kugou');
+// 默认验证码登录：手机扫码场景下二维码就显示在本机上，用户拿这台手机扫它自己不方便，
+// 扫码入口保留在下方图标网格里，需要的人自己切。
+const method = ref<LoginMethod>('sms');
 const activeMeta = computed(() => METHODS.find((item) => item.value === method.value) ?? METHODS[0]);
 
 /* ── 三个扫码会话 ── */
@@ -167,9 +169,7 @@ const onSendCode = async () => {
 
 const loadQr = () => activeQr.value?.reload();
 
-// 初始激活扫码（默认方式）
-kugouQr.activate();
-
+// 默认是表单类方式，挂载时不预拉任何二维码；切到扫码方式时由下面的 watch 激活。
 watch(method, (value) => {
   // 切到某个扫码方式但还没码（例如从表单切回来）时补一次
   if (value === 'kugou' || value === 'qq' || value === 'wechat') {

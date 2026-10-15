@@ -27,6 +27,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { applyGradeInfoStandardConfig } from './patches/grade-info-config.mjs';
+import { applyQqAuthorizeUrlMode } from './patches/qq-login-authorize-url.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(here, '..');
@@ -426,6 +427,9 @@ const AXIOX_NATIVE_SHIM = path.join(here, 'shims', 'axios-native.cjs');
  * 浏览器禁止设置 Cookie/Referer/User-Agent，实测 ptqrshow 因 Cookie 被丢弃返回 403，
  * 二维码一直显示"加载失败"。改走原生请求后同样的请求返回 200。
  * 只重写这两个文件里的 `require('axios')`，其它模块继续用打包内的 axios。
+ *
+ * login_qq_qr_create.js 还链上 mode=url 授权页补丁 —— esbuild 的 onLoad
+ * 先到先得，同一文件只能有一个插件处理，补丁必须接在这里套。
  */
 const routeQqLoginThroughNativeHttp = {
   name: 'echo-qq-login-native-http',
@@ -440,8 +444,15 @@ const routeQqLoginThroughNativeHttp = {
           `[kugou-api] ${path.basename(args.path)} 里找不到 "${needle}"，QQ 登录原生请求补丁需要更新`,
         );
       }
+      let contents = source.replace(
+        needle,
+        `const axios = require(${JSON.stringify(AXIOX_NATIVE_SHIM)});`,
+      );
+      if (/login_qq_qr_create\.js$/.test(args.path)) {
+        contents = applyQqAuthorizeUrlMode(contents).contents;
+      }
       return {
-        contents: source.replace(needle, `const axios = require(${JSON.stringify(AXIOX_NATIVE_SHIM)});`),
+        contents,
         loader: 'js',
       };
     });
