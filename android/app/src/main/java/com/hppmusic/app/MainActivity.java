@@ -1,7 +1,13 @@
 package com.hppmusic.app;
 
 import android.os.Bundle;
+import android.view.View;
 import android.webkit.WebView;
+
+import androidx.core.graphics.Insets;
+import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
+import androidx.core.view.WindowInsetsCompat;
 
 import com.getcapacitor.BridgeActivity;
 
@@ -21,6 +27,43 @@ public class MainActivity extends BridgeActivity {
         if (BuildConfig.DEBUG) {
             WebView.setWebContentsDebuggingEnabled(true);
         }
+
+        // 内容铺满到状态栏/导航栏底下（Android 15 起系统本来就强制如此），
+        // 具体留白交给 CSS 的 --safe-*（见 src/mobile/design/tokens.css）。
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+
+        final View decor = getWindow().getDecorView();
+        ViewCompat.setOnApplyWindowInsetsListener(decor, (view, windowInsets) -> {
+            Insets bars = windowInsets.getInsets(
+                    WindowInsetsCompat.Type.systemBars() | WindowInsetsCompat.Type.displayCutout());
+            injectSafeAreaInsets(bars);
+            return windowInsets;
+        });
+        // 监听器只在下一次 insets 变化时回调，主动请求一次拿到初始值
+        ViewCompat.requestApplyInsets(decor);
+    }
+
+    /**
+     * 把系统栏 insets 注入成 CSS 变量。
+     *
+     * 不用 Capacitor 内置的 SystemBars 注入（已在 capacitor.config.ts 里把
+     * insetsHandling 设成 disable）：它按 WebView 版本分叉 —— 老 Chromium 给
+     * WebView 加 padding 并把变量设成 0，新 Chromium 才给真值。同一份 CSS 在
+     * 两种设备上表现不同，出问题极难定位（本项目已经踩过一次：模拟器正常、
+     * 真机顶部被状态栏盖住）。
+     *
+     * 这里统一由原生给真值，CSS 只管按 --safe-* 留白。
+     */
+    private void injectSafeAreaInsets(Insets bars) {
+        if (bridge == null) return;
+        final float density = getResources().getDisplayMetrics().density;
+        final String js = "(() => { const s = document.documentElement.style;"
+                + " s.setProperty('--safe-area-inset-top', '" + Math.round(bars.top / density) + "px');"
+                + " s.setProperty('--safe-area-inset-bottom', '" + Math.round(bars.bottom / density) + "px');"
+                + " s.setProperty('--safe-area-inset-left', '" + Math.round(bars.left / density) + "px');"
+                + " s.setProperty('--safe-area-inset-right', '" + Math.round(bars.right / density) + "px');"
+                + " })()";
+        bridge.eval(js, null);
     }
 
     /**

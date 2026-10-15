@@ -18,6 +18,15 @@
  *
  * 安全区不在这里算 —— 统一桥接成 --safe-*（见 tokens.css 的说明），
  * 由两条栏自己吃自己的那部分（顶部栏吃 --safe-top，底部栏吃 --safe-bottom）。
+ *
+ * ## 内容区为什么要自己吃一份 --safe-top
+ *
+ * 上面那条规则只对「自己的顶栏」成立：子页签页由 SubTabBar 吃掉顶部安全区，
+ * 但**独立页根本没有顶栏组件**（详情页、设置、搜索、我的…），没人吃这一份，
+ * 于是内容直接顶到状态栏/刘海底下。
+ *
+ * 所以在内容区统一垫一次，带子页签时抵消掉 —— 不能逐个去给 PageHeader 加：
+ * 那要改 13 个页面的顶栏，漏一个就静默错位，而这里一处就覆盖全站。
  */
 import { computed, onMounted, onUnmounted } from 'vue';
 import { useRoute } from 'vue-router';
@@ -49,7 +58,7 @@ onMounted(() => {
   <div class="shell">
     <SubTabBar v-if="subTabVisible" />
 
-    <main class="shell-content">
+    <main class="shell-content" :class="{ 'has-sub-tabs': subTabVisible }">
       <slot />
     </main>
 
@@ -75,5 +84,16 @@ onMounted(() => {
   min-height: 0;
   position: relative;
   overflow: hidden;
+  /**
+   * 独立页没有顶栏组件去喫顶部安全区，这里统一垫一次。
+   * 注意是 padding 而不是给内容加 margin：padding 不计入滚动区，
+   * 列表滚到底时不会把这一条一起卷走。
+   */
+  padding-top: var(--safe-top);
+}
+
+/* 子页签栏已经喫过 --safe-top 了，再垫一次就是双倍留白 */
+.shell-content.has-sub-tabs {
+  padding-top: 0;
 }
 </style>

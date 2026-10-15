@@ -21,6 +21,17 @@ const config: CapacitorConfig = {
        */
       enabled: true,
     },
+    /**
+     * 关掉 Capacitor 自带的系统栏 insets 注入，改由 MainActivity 统一注入。
+     *
+     * 它的行为**随 WebView 版本分叉**：老 Chromium 给 WebView 加 padding 并把
+     * --safe-area-inset-* 设成 0，新 Chromium 才给真值。同一份 CSS 在两种设备上
+     * 表现不同 —— 真机上顶部被状态栏盖住、而模拟器上一切正常，就是这么来的。
+     * 交给原生统一给值后，行为在所有设备上一致。
+     */
+    SystemBars: {
+      insetsHandling: 'disable',
+    },
   },
 };
 
