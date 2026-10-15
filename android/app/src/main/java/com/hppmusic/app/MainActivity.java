@@ -1,9 +1,11 @@
 package com.hppmusic.app;
 
+import android.os.Build;
 import android.os.Bundle;
 import android.view.View;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
+import android.window.OnBackInvokedDispatcher;
 
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
@@ -60,6 +62,9 @@ public class MainActivity extends BridgeActivity {
         if (webView != null) {
             webView.addJavascriptInterface(new SafeAreaQuery(), "HppSafeArea");
         }
+
+        // 返回键：新系统走 OnBackInvokedDispatcher，老系统走 onBackPressed（见下面的说明）
+        registerBackHandler();
     }
 
     /** 供前端查询系统栏 insets（单位 dp，对应 CSS 的 px） */
@@ -105,13 +110,33 @@ public class MainActivity extends BridgeActivity {
      *
      * ⚠️ Capacitor 的 BridgeActivity 自己不接返回键，不覆写这里的话默认行为是
      * 直接 finish()：在任何子页面按返回都是杀进程，而不是路由后退。
+     *
+     * ⚠️⚠️ 但**只覆写 onBackPressed 在真机上不够**：Android 13(API 33) 起系统改用
+     * OnBackInvokedDispatcher，而 Android 15+ 对 targetSdk ≥ 35 的应用（本项目是 36）
+     * **默认启用预测性返回** —— 那时 onBackPressed() 根本不会被回调，用户按返回走的是
+     * 系统默认的 finish()，现象就是"播放页按返回直接回桌面"。模拟器是 API 32、走的是
+     * 老路径，所以这个坑只在真机出现（踩过）。两套入口都要接。
      */
     @SuppressWarnings("deprecation")
     @Override
     public void onBackPressed() {
+        if (!handleBackNavigation()) super.onBackPressed();
+    }
+
+    /** 注册新式返回回调（API 33+）。老系统仍然走 onBackPressed。 */
+    private void registerBackHandler() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBackNavigation);
+        }
+    }
+
+    /**
+     * @return 是否已自行处理（false 表示调用方可以走默认行为）
+     */
+    private boolean handleBackNavigation() {
         if (bridge == null) {
-            super.onBackPressed();
-            return;
+            return false;
         }
         // evaluateJavascript 是异步的，但整个决策只在回调里做一次，不存在竞态；
         // 页面未就绪时回调收到 null，按「没有浮层消费」继续走路由/退后台。
@@ -136,5 +161,6 @@ public class MainActivity extends BridgeActivity {
                 }
                 moveTaskToBack(true);
             });
+        return true;
     }
 }

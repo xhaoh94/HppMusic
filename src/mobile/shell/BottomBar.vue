@@ -108,6 +108,13 @@ const openNowPlaying = () => {
   flex: 0 0 auto;
   display: flex;
   align-items: stretch;
+  /*
+   * ⚠️ 必须 content-box：全局是 border-box，`height: calc(56px + 安全区)` 会把
+   * 安全区算进那 56px —— 内容区只剩 20 多 px，48px 的圆钮上下都溢出
+   * （实测真机：圆钮一边贴底、一边盖到上面的内容上）。
+   * 这里让 56px 是内容高度，安全区另加。
+   */
+  box-sizing: content-box;
   height: calc(var(--bottom-bar-height) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
   background: var(--bg-bar);
@@ -151,9 +158,9 @@ const openNowPlaying = () => {
   width: 48px;
   height: 48px;
   flex: 0 0 48px;
-  /* 上提 5px（居中时下外边距会把整个盒子往上推一半）：48px 的圆在 56px 的栏里
-     贴底边显得局促，抬起来一点更像"浮"着的唱片钮 */
-  margin: 0 var(--sp-2) 10px;
+  /* 不做手工位移：内容区修好后 48px 的圆钮在 56px 里上下各留 4px，再往下还有安全区，
+     观感已经不再是"贴底"。之前那 10px 位移正是圆钮顶到内容上的原因 */
+  margin: 0 var(--sp-2);
   border-radius: 50%;
   overflow: hidden;
   color: var(--text-tertiary);
