@@ -115,10 +115,20 @@ public class MainActivity extends BridgeActivity {
         }
         // evaluateJavascript 是异步的，但整个决策只在回调里做一次，不存在竞态；
         // 页面未就绪时回调收到 null，按「没有浮层消费」继续走路由/退后台。
+        //
+        // ⚠️ 返回值必须按**布尔**比：`Bridge.eval` 走 evaluateJavascript，它是 JSON 编码 ——
+        // 布尔 true 得到 `true`，而字符串 "true" 得到 `"true"`（带引号）。
+        // 上面那句 JS 以前是 `JSON.stringify(... || false)`，拿到的是带引号的字符串，
+        // 于是 "true".equals(result) 永远不成立：**JS 钩子的副作用都发生了（抽屉会关、
+        // 路由也变了），但原生每次都当没消费**，继续 canGoBack()（vue-router 的
+        // pushState 历史在 WebView 返回栈里不算数）→ moveTaskToBack()，
+        // 用户看到的就是"按返回直接回桌面"。
         bridge.eval(
-            "JSON.stringify((window.__echoMobileBack && window.__echoMobileBack()) || false)",
+            "(window.__echoMobileBack && window.__echoMobileBack()) === true",
             (result) -> {
-                if ("true".equals(result)) return;
+                // 去掉 JSON 编码可能带的引号，两种形式都认
+                String consumed = result == null ? "" : result.replace("\"", "").trim();
+                if ("true".equals(consumed)) return;
                 WebView webView = bridge.getWebView();
                 if (webView != null && webView.canGoBack()) {
                     webView.goBack();

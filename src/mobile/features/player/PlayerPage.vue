@@ -55,6 +55,7 @@ import {
 import { useArtistPortraits } from '@mobile/adapters/portrait';
 import { useSettingStore } from '@/stores/setting';
 import { useToastStore } from '@/stores/toast';
+import { goBackOneLevel } from '@mobile/router';
 import logger from '@/utils/logger';
 import {
   iconAudioWave,
@@ -223,8 +224,8 @@ const jumpTo = async (songId: string) => {
 };
 
 const goBack = () => {
-  if (window.history.length > 1) router.back();
-  else void router.replace({ name: 'home' });
+  // 与系统返回键同一套语义（含「自动改道来的播放页回到本来要去的列表」）
+  if (!goBackOneLevel(router, 'player')) void router.replace({ name: 'home' });
 };
 
 onMounted(() => {

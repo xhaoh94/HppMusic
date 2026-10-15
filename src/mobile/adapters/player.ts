@@ -64,6 +64,24 @@ export const bootstrapPlayer = (): Promise<void> => {
 
     await playerStore.init();
     logger.info('MobilePlayer', 'Player kernel ready');
+
+    /**
+     * 「启动时自动播放」：冷启动恢复上次队列后自动续播。
+     *
+     * 开关是内核 setting 的（autoPlayOnLaunch），桌面端由它的视图层读 ——
+     * 移动端没有那一层，不在这里接就是个"能拨但没反应"的死开关
+     * （实测：设置开着冷启动后原生媒体会话 state=0，什么都没放）。
+     */
+    if (
+      useSettingStore().autoPlayOnLaunch &&
+      playerStore.currentTrackId &&
+      !playerStore.isPlaying
+    ) {
+      // 不 await：取播放地址要一次网络往返，别拖住启动；失败只记日志
+      void Promise.resolve(playerStore.togglePlay()).catch((error) => {
+        logger.warn('MobilePlayer', 'Auto play on launch failed', error);
+      });
+    }
   })().catch((error) => {
     // 失败不缓存：让下一次调用能重试（网络抖动导致的失败不该永久锁死播放）
     bootstrapPromise = null;

@@ -9,6 +9,7 @@
  * 冷启动不必为 20 个页面付解析代价（内核 + KuGou API 打包产物本身已 1.4MB）。
  */
 import { createRouter, createWebHashHistory } from 'vue-router';
+import type { Router } from 'vue-router';
 import {
   autoPlayAndOpenOnEnter,
   claimFirstEntry,
@@ -182,6 +183,59 @@ export const router = createRouter({
 });
 
 /**
+ * 自动改道打开播放页时，记下"用户本来要去的那一页"。
+ *
+ * 守卫里的 `return { name: 'player' }` 在 vue-router 里是 **replace** 语义
+ * （源码 `push({ ...to, replace: true })`），那个列表页根本没进历史 ——
+ * 播放页返回时没有可退的上一级，只能靠这个记号补一次跳转。
+ */
+let autoOpenedPlayerParent: string | null = null;
+
+export const markAutoOpenedPlayerParent = (name: string): void => {
+  autoOpenedPlayerParent = name;
+};
+
+export const clearAutoOpenedPlayerParent = (): void => {
+  autoOpenedPlayerParent = null;
+};
+
+/** 在这几个路由上按返回只该退到后台（音乐继续播） */
+const ROOT_ROUTES = new Set(['home', 'loading', 'login', 'not-found']);
+
+/**
+ * 返回上一级。返回 true = 已处理，原生不要再去问 WebView 历史、也不要退后台。
+ *
+ * ⚠️ 为什么不让原生用 `canGoBack()`：**vue-router 的 pushState 历史在 WebView 的
+ * 返回栈里不算数**。实测：自动改道打开的播放页 `history.length=2`、
+ * `state.back='/main/home'`，但原生 `canGoBack()` 是 false，直接
+ * `moveTaskToBack()` —— 用户看到的是"按返回直接回桌面"。
+ * 所以这里自己按 vue-router 的历史状态决定往哪退。
+ */
+export const goBackOneLevel = (router: Router, routeName?: string | symbol | null): boolean => {
+  const name = String(routeName ?? '');
+
+  // ① 自动改道来的播放页：回到用户本来要去的页（它没进历史，只能补跳）
+  if (name === 'player' && autoOpenedPlayerParent) {
+    const parent = autoOpenedPlayerParent;
+    autoOpenedPlayerParent = null;
+    void router.replace({ name: parent });
+    return true;
+  }
+
+  // ② vue-router 记着上一级 → 自己退
+  const back = (window.history.state as { back?: string | null } | null)?.back;
+  if (back) {
+    window.history.back();
+    return true;
+  }
+
+  // ③ 没有上一级：根页面交给原生（退后台），其余回首页
+  if (!name || ROOT_ROUTES.has(name)) return false;
+  void router.replace({ name: 'home' });
+  return true;
+};
+
+/**
  * 未登录不放行主界面。
  *
  * 手机上没有第二台设备能扫自己屏幕上的登录二维码，所以登录是使用前提。
@@ -244,6 +298,9 @@ router.beforeEach((to, from) => {
 
   // 不 await：等它回来才放行的话，又变成"（空白）等一会儿再跳"，等于把延迟搬到别处。
   void ensureFreeListenPlaying(claimFirstEntry());
+
+  // 记下来源：改道是 replace 语义，这一页不进历史，返回时只能靠这个记号回去
+  markAutoOpenedPlayerParent('free-listen');
 
   // 改道去播放页：**每次**都做
   return { name: 'player' };

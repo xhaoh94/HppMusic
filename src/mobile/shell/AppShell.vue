@@ -31,13 +31,15 @@
  * 全屏页（`meta.shell === false`：播放/登录/启动/404）除外 —— 它们自己吃
  * 安全区，外壳再垫就是双重留白，播放页顶部还会因此露出一条外壳底色带。
  */
-import { computed, onMounted, onUnmounted } from 'vue';
-import { useRoute } from 'vue-router';
+import { computed, onMounted, onUnmounted, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import SubTabBar from './SubTabBar.vue';
 import BottomBar from './BottomBar.vue';
 import { pushBackHandler } from '@bridge/backButton';
+import { clearAutoOpenedPlayerParent, goBackOneLevel } from '@mobile/router';
 
 const route = useRoute();
+const router = useRouter();
 
 /** 启动页/登录页/404 等全屏页不带任何导航栏。 */
 const shellVisible = computed(() => route.meta.shell !== false);
@@ -45,16 +47,26 @@ const shellVisible = computed(() => route.meta.shell !== false);
 const subTabVisible = computed(() => shellVisible.value && route.meta.section === 'main');
 
 /**
- * 系统返回键：先问上层浮层，没被消费就交给原生走 WebView 历史后退，
- * 没有历史时原生会退到后台（音乐继续播，这才是音乐应用该有的行为）。
+ * 系统返回键的最后一站：上层浮层都没消费时，按语义退一级。
  *
- * 这里注册的是一个"永不消费"的兜底处理器，存在的意义是让询问链有个终点；
+ * 用 goBackOneLevel 自己决定，而不是把决定权交回原生 —— vue-router 的 pushState
+ * 历史在 WebView 的返回栈里不算数，原生 canGoBack() 是 false 就会直接退后台
+ * （实测现象："按返回直接回桌面"）。根页面仍返回 false，交给原生退后台（音乐继续播）。
+ *
  * 播放页/歌词页/抽屉等更上层的浮层由它们自己注册（后注册的先被问）。
  */
 onMounted(() => {
-  const off = pushBackHandler(() => false);
+  const off = pushBackHandler(() => goBackOneLevel(router, route.name));
   onUnmounted(off);
 });
+
+// 离开播放页就清掉"自动改道来源"，避免残留的记号影响之后某次返回
+watch(
+  () => route.name,
+  (name) => {
+    if (name !== 'player') clearAutoOpenedPlayerParent();
+  },
+);
 </script>
 
 <template>
