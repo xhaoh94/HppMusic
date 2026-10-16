@@ -120,6 +120,8 @@ const onClick = () => {
 
     <div class="song-meta">
       <div class="song-title-row">
+        <!-- 正在播放：三条跳动的音量柱，比单纯变色好认（列表里一眼能找到） -->
+        <span v-if="active" class="playing-bars" aria-label="正在播放"><i /><i /><i /></span>
         <p class="song-title ellipsis">{{ song.title || song.name || '未知歌曲' }}</p>
         <span
           v-for="tag in privilegeTags"
@@ -200,11 +202,58 @@ const onClick = () => {
 }
 
 .song-title {
-  flex: 1;
+  /*
+   * 不 grow：标签要**紧跟歌名文字**，而不是被推到行尾。
+   * `flex: 1` 时短歌名右边会空一大片、标签跑到行尾，长歌名才勉强贴上。
+   * shrink 保留 + min-width:0：名字过长时让它收让出空间（ellipsis 生效），标签不换行。
+   */
+  flex: 0 1 auto;
   min-width: 0;
   margin: 0;
   font-size: var(--font-md);
   color: var(--text-primary);
+}
+
+/* 正在播放的音量柱：纯 CSS 三条，不同高度 + 错开延迟，看起来在跳 */
+.playing-bars {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+}
+
+.playing-bars i {
+  width: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+  transform-origin: bottom;
+  animation: playing-bars 0.9s ease-in-out infinite;
+}
+
+.playing-bars i:nth-child(1) {
+  height: 5px;
+  animation-delay: -0.4s;
+}
+
+.playing-bars i:nth-child(2) {
+  height: 9px;
+  animation-delay: -0.2s;
+}
+
+.playing-bars i:nth-child(3) {
+  height: 6px;
+  animation-delay: -0.6s;
+}
+
+@keyframes playing-bars {
+  0%,
+  100% {
+    transform: scaleY(0.35);
+  }
+  50% {
+    transform: scaleY(1);
+  }
 }
 
 /*
@@ -229,8 +278,17 @@ const onClick = () => {
   --tag-color: #06b6d4;
 }
 
+/* 正在播放：整行淡绿底 + 歌名变色 + 音量柱，三管齐下（用户要求"一眼看出"） */
+.song-row.is-active {
+  background: var(--accent-soft);
+}
+
 .song-row.is-active .song-title {
   color: var(--accent);
+}
+
+.song-row.is-active:active {
+  background: var(--accent-soft);
 }
 
 .song-artist {

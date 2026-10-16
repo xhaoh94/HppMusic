@@ -26,7 +26,6 @@ import { useToastStore } from '@/stores/toast';
 import {
   iconBarrage,
   iconMoon,
-  iconPlaylistAdd,
   iconShirt,
   iconSlidersHorizontal,
   iconSpeed,
@@ -45,7 +44,6 @@ const emit = defineEmits<{
   'update:skin': [value: PlayerSkin];
   /** 音效面板由播放页承载（本组件不自己再开一层 Sheet，否则两层遮罩会叠） */
   'open-effect': [];
-  'open-add-to-playlist': [];
 }>();
 
 const player = usePlayerStore();
@@ -211,12 +209,10 @@ const openMv = () => {
         </div>
       </div>
 
-      <!-- 添加到歌单 -->
-      <button type="button" class="row" @click="emit('open-add-to-playlist')">
-        <Icon :icon="iconPlaylistAdd" width="20" height="20" class="row-icon" />
-        <span class="row-label">添加到</span>
-        <span class="row-chevron" aria-hidden="true">›</span>
-      </button>
+      <!--
+        「添加到歌单」不在这里：播放页操作栏已经有同一个入口（在「收藏」左边），
+        两处都能打开同一个面板属于重复。要恢复把这段和下面的 emit 一起加回来。
+      -->
 
       <!-- 播放 MV -->
       <button type="button" class="row" :disabled="!albumAudioId" @click="openMv">
@@ -425,6 +421,9 @@ const openMv = () => {
 .row-with-switch {
   display: flex;
   align-items: center;
+  /* 左侧不留白：内层 .row-main 自己有同样的 8px，这里是外层，再留就变成双重缩进
+     —— 弹幕那一行会比别的行右移 8px（实测 iconX 36 vs 28） */
+  padding-left: 0;
   padding-right: var(--sp-2);
 }
 

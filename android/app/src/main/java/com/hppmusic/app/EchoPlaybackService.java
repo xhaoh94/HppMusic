@@ -14,7 +14,9 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
 import android.util.Log;
+import android.view.KeyEvent;
 
+import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import androidx.media3.common.AudioAttributes;
@@ -158,6 +160,11 @@ public final class EchoPlaybackService extends MediaSessionService {
         return !destroyed && player != null;
     }
 
+    /** 是否正在出声（决定媒体按键里的 PLAY_PAUSE 该发 Play 还是 Pause） */
+    private boolean isPlayerPlaying() {
+        return isPlayerReady() && player.isPlaying();
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
@@ -222,6 +229,59 @@ public final class EchoPlaybackService extends MediaSessionService {
 
         mediaSession = new MediaSession.Builder(this, player)
                 .setId("HppMusic")
+                .setCallback(new MediaSession.Callback() {
+                    /**
+                     * 蓝牙耳机 / 车机 / 有线线控的媒体按键。
+                     *
+                     * ⚠️ 这些按键以 `MEDIA_BUTTON` 广播进 `MediaButtonReceiver`
+                     * （manifest 里必须显式声明，否则系统那句
+                     * `Couldn't find a unique registered media button receiver`
+                     * 会一直存在、按键静默失效），再送到这里。
+                     *
+                     * Media3 默认会把按键翻译成 player 的命令，而本项目的 player 里
+                     * 始终只有一个 MediaItem（队列/随机/单循环/失败跳过都在渲染层），
+                     * 原生 seek 下一首无从下手 —— 所以按本类既有的约定转成
+                     * onMediaControl 事件交回渲染层，类型名与内核的
+                     * setMediaSessionHandlers 逐字对齐。
+                     */
+                    @SuppressWarnings("deprecation")
+                    @Override
+                    public boolean onMediaButtonEvent(
+                            @NonNull MediaSession session,
+                            @NonNull MediaSession.ControllerInfo controllerInfo,
+                            @NonNull Intent mediaButtonIntent) {
+                        if (!Intent.ACTION_MEDIA_BUTTON.equals(mediaButtonIntent.getAction())) {
+                            return false;
+                        }
+                        KeyEvent event = mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
+                        // 只认按下：重复的 ACTION_UP 会让一次点击切两首
+                        if (event == null || event.getAction() != KeyEvent.ACTION_DOWN) return false;
+
+                        String type;
+                        switch (event.getKeyCode()) {
+                            case KeyEvent.KEYCODE_MEDIA_NEXT:
+                                type = "NextSong";
+                                break;
+                            case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
+                                type = "PreviousSong";
+                                break;
+                            case KeyEvent.KEYCODE_MEDIA_PLAY:
+                                type = "Play";
+                                break;
+                            case KeyEvent.KEYCODE_MEDIA_PAUSE:
+                            case KeyEvent.KEYCODE_MEDIA_STOP:
+                                type = "Pause";
+                                break;
+                            case KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE:
+                                type = isPlayerPlaying() ? "Pause" : "Play";
+                                break;
+                            default:
+                                return false;
+                        }
+                        emitMediaControl(type);
+                        return true;
+                    }
+                })
                 .build();
         createNotificationChannel();
         mainHandler.post(positionTicker);

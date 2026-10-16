@@ -395,7 +395,6 @@ onBeforeUnmount(() => {
     :skin="skin"
     @update:skin="setSkin"
     @open-effect="switchSheet((open) => (effectOpen = open))"
-    @open-add-to-playlist="switchSheet((open) => (addToPlaylistOpen = open))"
   />
   <AddToPlaylistSheet v-model="addToPlaylistOpen" :song="track" />
   <CommentSheet v-model="commentOpen" />

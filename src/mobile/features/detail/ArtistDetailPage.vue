@@ -15,6 +15,8 @@ import PageHeader from '@mobile/components/PageHeader.vue';
 import DetailHeader from '@mobile/components/DetailHeader.vue';
 import SongRow from '@mobile/components/SongRow.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
+import { useCurrentSongKey, useLocatePlayingSong } from '@mobile/composables/useCurrentSong';
+import { songKeyOf } from '@mobile/utils/songKey';
 import { useInfiniteList } from '@mobile/composables/useInfiniteList';
 import { usePlaybackActions } from '@mobile/adapters/player';
 import { getArtistDetail, getArtistSongsV2 } from '@/api/artist';
@@ -44,6 +46,10 @@ const songs = useInfiniteList<Song>(async (page) => {
   const items = extractList(response).map((item) => mapArtistSongV2(item));
   return { items, hasMore: items.length >= PAGE_SIZE };
 });
+
+// 当前播放标记 + 首次打开列表自动定位到正在播的那首
+const { currentSongKey } = useCurrentSongKey();
+useLocatePlayingSong(songs.items, currentSongKey);
 
 const loadMeta = async () => {
   metaState.value = 'loading';
@@ -136,6 +142,7 @@ watch(sort, () => void songs.reload());
           v-for="(song, index) in songs.items.value"
           :key="`${song.id}-${index}`"
           :song="song"
+          :active="songKeyOf(song) === currentSongKey"
           show-index
           :index="index"
           @select="onSelectSong"

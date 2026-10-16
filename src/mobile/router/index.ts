@@ -16,6 +16,7 @@ import {
 } from '@mobile/composables/usePlaybackPrefs';
 import { ensureFreeListenPlaying } from '@mobile/adapters/freeListen';
 import { pinia } from '@mobile/store';
+import { useToastStore } from '@/stores/toast';
 
 /**
  * 用 hash 路由：Capacitor 的 WebView 以 `https://localhost` 提供静态文件，
@@ -200,7 +201,27 @@ export const clearAutoOpenedPlayerParent = (): void => {
 };
 
 /** 在这几个路由上按返回只该退到后台（音乐继续播） */
-const ROOT_ROUTES = new Set(['home', 'loading', 'login', 'not-found']);
+const ROOT_ROUTES = new Set(['home', 'profile', 'loading', 'login', 'not-found']);
+
+// ── 根页签的"再按一次退出" ──
+//
+// ⚠️ 这里**不能** `return false` 交给原生兜底：Capacitor 的兜底是「按 WebView
+// 历史后退，没有历史才退后台」—— 有历史时它会把用户退回上一个页面，跟 App
+// 自己的返回逻辑（goBackOneLevel）互相打架，真机上表现为按返回在两个页面
+// 之间来回横跳。所以根页签的返回必须在这里消费掉：
+// 第一次返回 → 提示；两秒内再按 → 调原生退后台（音乐继续播）。
+const EXIT_CONFIRM_WINDOW_MS = 2000;
+let lastRootBackAt = 0;
+
+/** 调 EchoAppPlugin 退到后台；插件不存在（纯浏览器调试）时静默跳过。 */
+const moveAppToBackground = async (): Promise<void> => {
+  const plugins = (
+    window as unknown as {
+      Capacitor?: { Plugins?: { EchoApp?: { moveToBackground?: () => Promise<void> } } };
+    }
+  ).Capacitor?.Plugins;
+  await plugins?.EchoApp?.moveToBackground?.();
+};
 
 /**
  * 上一次停留的「主页分区」子页签路径。
@@ -238,6 +259,22 @@ export const suppressNextHomeAutoOpen = (): void => {
 export const goBackOneLevel = (router: Router, routeName?: string | symbol | null): boolean => {
   const name = String(routeName ?? '');
 
+  // ⓪ 根页签：第一次返回提示"再按一次退出"，两秒内再按才真正退到后台。
+  //    ⚠️ 必须排在 ①② 之前：② 只看"历史上有没有上一页"，不看当前是不是
+  //    根页签 —— 放在后面的话，根页签会被 history.back() 退回上一个页面，
+  //    真机上就是两个页面之间来回横跳（实测复现）。
+  if (!name || ROOT_ROUTES.has(name)) {
+    const now = Date.now();
+    if (now - lastRootBackAt < EXIT_CONFIRM_WINDOW_MS) {
+      lastRootBackAt = 0;
+      void moveAppToBackground();
+      return true;
+    }
+    lastRootBackAt = now;
+    useToastStore(pinia).info('再按一次返回键退出');
+    return true;
+  }
+
   // ① 自动改道来的播放页：回到用户本来要去的页（它没进历史，只能补跳）
   if (name === 'player' && autoOpenedPlayerParent) {
     const parent = autoOpenedPlayerParent;
@@ -253,8 +290,7 @@ export const goBackOneLevel = (router: Router, routeName?: string | symbol | nul
     return true;
   }
 
-  // ③ 没有上一级：根页面交给原生（退后台），其余回首页
-  if (!name || ROOT_ROUTES.has(name)) return false;
+  // ③ 非根页面又没有上一级：回首页兜底（根页签在 ⓪ 已经处理）
   void router.replace({ name: 'home' });
   return true;
 };

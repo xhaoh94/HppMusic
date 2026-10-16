@@ -23,6 +23,22 @@
           后者管的是 https 页面加载 http 子资源，前者管的是明文请求本身。
         -->
 
+        <!--
+          蓝牙耳机 / 车机 / 有线线控的媒体按键入口。
+
+          Media3 不会自动注册它，不声明的话按键广播没人接：日志里常年挂着
+          `Couldn't find a unique registered media button receiver`，用户按耳机
+          上的"下一首"静默无响应。按键最终由 EchoPlaybackService 的
+          MediaSession.Callback.onMediaButtonEvent 转成渲染层的切歌事件。
+        -->
+        <receiver
+            android:name="androidx.media3.session.MediaButtonReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.MEDIA_BUTTON" />
+            </intent-filter>
+        </receiver>
+
         <!-- 后台播放：MediaSessionService，通知栏与锁屏控制由它提供 -->
         <service
             android:name=".EchoPlaybackService"

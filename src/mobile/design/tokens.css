@@ -132,9 +132,11 @@
   --fill-muted: rgba(255, 255, 255, 0.09);
   --fill-strong: rgba(255, 255, 255, 0.14);
 
-  --accent: #ff4e3a;
-  --accent-pressed: #e33f2d;
-  --accent-soft: rgba(255, 78, 58, 0.14);
+  /* 选中色 = 首页「每日推荐」磁贴那个绿（#34d399 → #10b981 渐变）；深色下取亮端，
+     用在文字/图标上更清楚 */
+  --accent: #34d399;
+  --accent-pressed: #10b981;
+  --accent-soft: rgba(52, 211, 153, 0.16);
   --accent-on: #ffffff;
 
   --success: #35c17b;
@@ -172,9 +174,10 @@
   --fill-muted: rgba(0, 0, 0, 0.06);
   --fill-strong: rgba(0, 0, 0, 0.1);
 
-  --accent: #ff3d28;
-  --accent-pressed: #d9301d;
-  --accent-soft: rgba(255, 61, 40, 0.12);
+  /* 同上，浅色背景取深端才够对比 */
+  --accent: #10b981;
+  --accent-pressed: #059669;
+  --accent-soft: rgba(16, 185, 129, 0.14);
   --accent-on: #ffffff;
 
   --success: #1f9d5f;

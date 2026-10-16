@@ -10,6 +10,8 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import PageHeader from '@mobile/components/PageHeader.vue';
 import SongRow from '@mobile/components/SongRow.vue';
+import { useCurrentSongKey, useLocatePlayingSong } from '@mobile/composables/useCurrentSong';
+import { songKeyOf } from '@mobile/utils/songKey';
 import EmptyState from '@mobile/components/EmptyState.vue';
 import ActionSheet from '@mobile/components/ActionSheet.vue';
 import { usePlaylistStore } from '@/stores/playlist';
@@ -27,6 +29,10 @@ const { playSong, playList, manualQueueMeta } = usePlaybackActions();
 const loadError = ref('');
 
 const songs = computed(() => playlist.favorites ?? []);
+
+// 当前播放标记 + 首次打开列表自动定位到正在播的那首
+const { currentSongKey } = useCurrentSongKey();
+useLocatePlayingSong(songs, currentSongKey);
 const isLoading = computed(() => playlist.favoritesLoading && !playlist.favoritesLoaded);
 
 const load = async (force = false) => {
@@ -129,6 +135,7 @@ onMounted(() => {
             v-for="(song, index) in songs"
             :key="`${song.id}-${index}`"
             :song="song"
+            :active="songKeyOf(song) === currentSongKey"
             @select="onSelect"
             @longpress="onLongPress"
           />

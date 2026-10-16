@@ -40,6 +40,8 @@ import { Icon } from '@iconify/vue';
 import { iconClose, iconRefresh, iconSearch } from '@mobile/icons';
 import { useNowPlaying, usePlaybackActions } from '@mobile/adapters/player';
 import { FREE_LISTEN_QUEUE, fetchFreeListenSongs } from '@mobile/adapters/freeListen';
+import { useCurrentSongKey, useLocatePlayingSong } from '@mobile/composables/useCurrentSong';
+import { songKeyOf } from '@mobile/utils/songKey';
 import { filterSongsByQuery } from '@/utils/songList';
 import { captureUserSession } from '@/utils/userSession';
 import { useUserStore } from '@/stores/user';
@@ -72,6 +74,10 @@ const songKey = (song: Song) => String(song.mixSongId || song.hash || song.id ||
 
 const displayedSongs = computed(() => filterSongsByQuery(songs.value, searchQuery.value));
 
+// 当前播放标记 + 首次打开列表自动定位到正在播的那首
+const { currentSongKey } = useCurrentSongKey();
+useLocatePlayingSong(displayedSongs, currentSongKey);
+
 const collectSongs = (list: Song[]): Song[] => {
   const batch: Song[] = [];
   for (const song of list) {
@@ -83,7 +89,31 @@ const collectSongs = (list: Song[]): Song[] => {
   return batch;
 };
 
-const load = async () => {
+/**
+ * 拉列表。默认会先尝试**从活动队列还原**，只有确认没得还原才真的去拉。
+ *
+ * 为什么：`songs` 是页面本地状态，重启 App 再进随便听就会重新拉一批 ——
+ * 用户正在听的那首歌虽然在队列里（所以能接着播），列表却已经被换成新的一批，
+ * 上下滑找不到刚才那首。队列本身是持久化的，直接用它还原即可。
+ *
+ * 会真的去拉的三种情况：
+ * · 活动队列不是随便听的（或压根没有）—— 没得还原；
+ * · 用户点「换一批」（force）；
+ * · 列表听完了要续 —— 那是 appendMore 的追加，不走这里。
+ */
+const load = async (options?: { force?: boolean }) => {
+  if (!options?.force && ownsActiveQueue.value) {
+    const queued = activeQueue.value?.songs ?? [];
+    if (queued.length > 0) {
+      // seenKeys 必须一起重建：否则 appendMore 的去重会把这些歌当成"没见过"
+      seenKeys.clear();
+      songs.value = collectSongs(queued);
+      loading.value = false;
+      loadError.value = '';
+      logger.info('FreeListen', 'Restored list from active queue:', songs.value.length);
+      return;
+    }
+  }
   const generation = ++loadGeneration;
   const isSessionCurrent = captureUserSession(user);
   loading.value = true;
@@ -103,10 +133,10 @@ const load = async () => {
   }
 };
 
-/** 换一批：连搜索词一起清掉，否则列表看起来"没变化" */
+/** 换一批：连搜索词一起清掉，否则列表看起来"没变化"；force 绕过队列还原 */
 const refresh = async () => {
   searchQuery.value = '';
-  await load();
+  await load({ force: true });
 };
 
 const clearSearch = () => {
@@ -284,6 +314,7 @@ onMounted(() => void load());
           v-for="(song, index) in displayedSongs"
           :key="`${song.id}-${index}`"
           :song="song"
+          :active="songKeyOf(song) === currentSongKey"
           show-index
           :index="index"
           @select="onSelect"

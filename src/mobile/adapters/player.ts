@@ -21,6 +21,7 @@ import { useLyricStore } from '@/stores/lyric';
 import { useSettingStore } from '@/stores/setting';
 import { isLyricLineFiltered, resolveVisibleLyricIndex } from '@/utils/lyricFilter';
 import { usePlaylistStore, MANUAL_PLAYBACK_QUEUE_ID } from '@/stores/playlist';
+import { DEFAULT_PLAYER_VOLUME } from '@shared/playback';
 import { useHistoryStore } from '@/stores/historyStore';
 import { waitForSqlitePersistHydration } from '@/stores/sqlitePersist';
 import { replaceQueueAndPlay } from '@/utils/playback';
@@ -70,6 +71,40 @@ export const bootstrapPlayer = (): Promise<void> => {
 
     await playerStore.init();
     logger.info('MobilePlayer', 'Player kernel ready');
+
+    /**
+     * 把出厂默认音量从 50 抬到 100。
+     *
+     * 内核 `DEFAULT_PLAYER_VOLUME = 50`（在 src/shared，属于只读 vendor，改不了），
+     * 原生按 `volume / 100` 换算成 0.5 —— 比满低 6 dB。再叠加响度标准化的
+     * -3 dB 左右，实测整体比官方 App 低 9 dB 以上，用户第一反应就是"声音小"。
+     *
+     * 移动端目前**没有任何音量 UI**（播放页 / 更多面板 / 设置里都没有），
+     * 所以 50 只可能是出厂默认值，遇到就抬到 100。
+     * ⚠️ 以后给播放页加音量控件时，这段要一起改 —— 否则用户调小会被顶回来。
+     */
+    if (playerStore.volume === DEFAULT_PLAYER_VOLUME) {
+      playerStore.setVolume(100);
+    }
+
+    /**
+     * 移动端默认关闭响度标准化，对齐官方酷狗 App 的音量。
+     *
+     * 内核按 EBU R128 把每首歌归一到 -14 LUFS，典型再衰减 3 dB 左右 ——
+     * 实测官方的音量明显更大（用户原话"官方 app 的声音就比我们的声音大很多"），
+     * 不关掉这层就没法对齐。设置页已按用户要求隐藏了这两个入口
+     * （响度标准化开关 + 参考响度），所以这里的值只可能是内核默认（开）。
+     *
+     * 代价（用户明确接受的）：跨歌曲音量按各首歌原本的电平走，不再拉平。
+     * 幂等：已经是关的就不动。
+     */
+    if (useSettingStore().volumeNormalization) {
+      // 两件事都要做：写设置项是为了**持久化**（内核 init 时会读它并下发给引擎，
+      // 见 stores/player.ts 的 init），调 player 的动作是为了让当前这次立即生效
+      // —— 只改设置项的话要等下次启动才不衰减。
+      useSettingStore().volumeNormalization = false;
+      playerStore.setVolumeNormalization(false);
+    }
 
     /**
      * 「启动时自动播放」：冷启动恢复上次队列后自动续播。

@@ -12,6 +12,8 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import PageHeader from '@mobile/components/PageHeader.vue';
 import SongRow from '@mobile/components/SongRow.vue';
+import { useCurrentSongKey, useLocatePlayingSong } from '@mobile/composables/useCurrentSong';
+import { songKeyOf } from '@mobile/utils/songKey';
 import EmptyState from '@mobile/components/EmptyState.vue';
 import ActionSheet from '@mobile/components/ActionSheet.vue';
 import Sheet from '@mobile/components/Sheet.vue';
@@ -44,6 +46,10 @@ const rows = computed<HistoryRow[]>(() =>
     song: entry.song,
   })),
 );
+
+// 当前播放标记 + 首次打开列表自动定位到正在播的那首
+const { currentSongKey } = useCurrentSongKey();
+useLocatePlayingSong(rows, currentSongKey);
 
 /** 播放上下文 = 整份历史，点一首能顺着往下听 */
 const contextSongs = computed(() => rows.value.map((row) => row.song));
@@ -149,6 +155,7 @@ const locateSongs = computed(() => rows.value.map((row) => row.song));
         <div v-for="row in rows" :key="row.entry.historyKey" class="history-row">
           <SongRow
             :song="row.song"
+            :active="songKeyOf(row.song) === currentSongKey"
             @select="onSelect"
             @longpress="onLongPress"
           />

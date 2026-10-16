@@ -30,6 +30,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(EchoNativePlayerPlugin.class);
         registerPlugin(EchoSharePlugin.class);
         registerPlugin(EchoNativeHttpPlugin.class);
+        registerPlugin(EchoAppPlugin.class);
         super.onCreate(savedInstanceState);
 
         // 只有 debug 包开 WebView 调试：`scripts/device-eval.mjs` 依赖它做真机断言

@@ -35,6 +35,7 @@ import { computed, onMounted, onUnmounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import SubTabBar from './SubTabBar.vue';
 import BottomBar from './BottomBar.vue';
+import { homeTabs } from './useHomeTabs';
 import { pushBackHandler } from '@bridge/backButton';
 import { clearAutoOpenedPlayerParent, goBackOneLevel } from '@mobile/router';
 
@@ -45,6 +46,45 @@ const router = useRouter();
 const shellVisible = computed(() => route.meta.shell !== false);
 /** 子页签栏只在「主页」分区出现（对齐参考产品：进搜索/我的时收起）。 */
 const subTabVisible = computed(() => shellVisible.value && route.meta.section === 'main');
+
+// ── 主页左右滑切换子页签 ──
+//
+// 手势判定（按用户要求，横滑列表内容不算）：
+// · 起点在横向滚动容器（.scroll-x，轮播图/推荐歌单横列）里 → 是在滚内容，不切；
+// · 横向位移 ≥ 56px 且明显大于纵向 → 左滑下一个、右滑上一个。
+// 监听放内容区这一层，随便听/发现/推荐歌单……整片都能滑，不用每个页签页各接一遍。
+const touchState = { startX: 0, startY: 0, inHorizontalScroller: false, armed: false };
+
+const switchToNeighborTab = (direction: 1 | -1) => {
+  const tabs = homeTabs.value;
+  const index = tabs.findIndex((tab) => tab.path === route.path);
+  if (index < 0) return;
+  const next = tabs[index + direction];
+  if (!next) return; // 已在边缘：不环绕，避免"滑了没看清滑到哪"的突兀跳变
+  void router.push(next.path);
+};
+
+const onShellTouchStart = (event: TouchEvent) => {
+  touchState.armed = subTabVisible.value;
+  if (!touchState.armed) return;
+  touchState.startX = event.touches[0].clientX;
+  touchState.startY = event.touches[0].clientY;
+  const target = event.target;
+  touchState.inHorizontalScroller =
+    target instanceof Element && !!target.closest('.scroll-x');
+};
+
+const onShellTouchEnd = (event: TouchEvent) => {
+  const { armed, inHorizontalScroller, startX, startY } = touchState;
+  touchState.armed = false;
+  if (!armed || inHorizontalScroller) return;
+  const touch = event.changedTouches[0];
+  const dx = touch.clientX - startX;
+  const dy = touch.clientY - startY;
+  // 位移太短、或主要是竖滑（那是在滚页面），都不算切页签
+  if (Math.abs(dx) < 56 || Math.abs(dx) < Math.abs(dy) * 1.4) return;
+  switchToNeighborTab(dx < 0 ? 1 : -1);
+};
 
 /**
  * 系统返回键的最后一站：上层浮层都没消费时，按语义退一级。
@@ -76,6 +116,8 @@ watch(
     <main
       class="shell-content"
       :class="{ 'has-sub-tabs': subTabVisible, 'is-fullscreen': !shellVisible }"
+      @touchstart="onShellTouchStart"
+      @touchend="onShellTouchEnd"
     >
       <slot />
     </main>

@@ -17,8 +17,10 @@
  *   grep -rn "settingStore\.<字段名>" src/renderer/stores src/renderer/utils
  * 有命中才写上来。本轮核对结果：
  *   有读取方 → autoPlayOnLaunch / volumeFade(+Time) /
- *              autoNext(+Delay/MaxAttempts) / defaultAudioQuality /
- *              volumeNormalization(+Lufs) / lyricFilterEnabled(+Pattern)
+ *              autoNext(+Delay/MaxAttempts) / defaultAudioQuality
+ *   入口已去掉（用户要求：普通用户看不懂 LUFS，其他 App 也没有）→
+ *              volumeNormalization(+Lufs)：内核仍在按 -14 LUFS 归一化（默认开），
+ *              只是设置页不再暴露；lyricFilterEnabled(+Pattern) 同理（默认关闭）
  *   grep 有命中但移动端是死链（已排除）→ seekForward|BackwardOffset：
  *              EchoPlaybackService.updateSkipIntervals 是空实现，通知栏
  *              MediaSession 也没声明 FAST_FORWARD/REWIND，两个 handler 永不触发
@@ -68,12 +70,6 @@ const qualityOptions: { value: AudioQualityValue; label: string }[] = [
   { value: 'flac', label: '无损' },
   { value: 'high', label: 'Hi-Res' },
 ];
-
-/* ── 响度 ── */
-const lufsOptions = [-9, -11, -14, -16, -18].map((value) => ({
-  value,
-  label: `${value} LUFS`,
-}));
 
 /* ── 歌词 ── */
 const lyricScaleOptions = [0.85, 1, 1.15, 1.3].map((value) => ({
@@ -187,19 +183,12 @@ onMounted(async () => {
         />
       </SettingsSection>
 
-      <SettingsSection title="音量">
-        <SwitchRow
-          v-model="setting.volumeNormalization"
-          label="响度标准化"
-          description="按参考响度调整每首歌的音量，避免忽大忽小"
-        />
-        <SegmentedRow
-          v-model="setting.volumeNormalizationLufs"
-          label="参考响度"
-          :options="lufsOptions"
-          :disabled="!setting.volumeNormalization"
-        />
-      </SettingsSection>
+      <!--
+        「音量」分区原来在这里：响度标准化开关 + 参考响度（-9~-18 LUFS）。
+        已按用户要求整体隐藏 —— 普通用户看不懂 LUFS，其他 App 也没有这种设置。
+        内核的 volumeNormalization / volumeNormalizationLufs 仍在（默认开、-14），
+        行为不变；要恢复入口把这两行加回来即可。
+      -->
 
       <SettingsSection title="歌词">
         <SegmentedRow v-model="lyricScale" label="歌词字号" :options="lyricScaleOptions" />
@@ -221,22 +210,11 @@ onMounted(async () => {
           label="简繁转换"
           :options="conversionOptions"
         />
-        <SwitchRow
-          v-model="setting.lyricFilterEnabled"
-          label="歌词过滤"
-          description="按正则隐藏匹配到的行（如作词/作曲等元信息）"
-        />
-        <div v-if="setting.lyricFilterEnabled" class="filter-input-row">
-          <input
-            v-model="setting.lyricFilterPattern"
-            class="filter-input"
-            type="text"
-            autocapitalize="off"
-            autocomplete="off"
-            placeholder="正则，例如：^(作词|作曲|编曲)"
-          />
-          <p class="filter-hint">留空则不隐藏任何行</p>
-        </div>
+        <!--
+          这里原来有「歌词过滤」（按正则隐藏行）。入口已去掉：普通用户看不懂正则，
+          实测也解释不清它干嘛用。内核那套过滤逻辑还在（lyricFilterEnabled /
+          lyricFilterPattern 默认关闭），要恢复只需把开关加回来。
+        -->
       </SettingsSection>
 
       <SettingsSection title="数据">
@@ -289,33 +267,6 @@ onMounted(async () => {
   flex: 1;
   min-height: 0;
   padding-bottom: var(--sp-8);
-}
-
-.filter-input-row {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-1);
-  padding: 0 0 var(--sp-3);
-}
-
-.filter-input {
-  height: 44px;
-  padding: 0 var(--sp-3);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--divider);
-  background: var(--bg-input);
-  font-size: var(--font-sm);
-  outline: none;
-}
-
-.filter-input:focus {
-  border-color: var(--accent);
-}
-
-.filter-hint {
-  margin: 0;
-  font-size: var(--font-xs);
-  color: var(--text-tertiary);
 }
 
 .legal {
