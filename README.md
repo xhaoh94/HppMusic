@@ -33,9 +33,9 @@
 
 | 层 | 归属 | 说明 |
 |---|---|---|
-| `src/mobile/**` | 自研 | 全部 UI、设计系统、路由、外壳 |
-| `src/bridge/**` | 自研 | 把内核依赖的 `window.electron.*` 接到移动端实现上 |
-| `android/**` | 自研 | Media3 播放器、DSP、前台服务、原生 HTTP |
+| `src/mobile/**` | HppMusic | 全部 UI、设计系统、路由、外壳 |
+| `src/bridge/**` | HppMusic | 把内核依赖的 `window.electron.*` 接到移动端实现上 |
+| `android/**` | HppMusic | Media3 播放器、DSP、前台服务、原生 HTTP |
 | `src/renderer/{api,models,utils,stores,services}` | 只读内核 | 业务逻辑与接口层 |
 | `src/shared/**`、`src/main/external/**` | 只读内核 | 共享类型、外部歌单解析器 |
 | `server/` | git submodule | KuGou API（[MakcRe/KuGouMusicApi](https://github.com/MakcRe/KuGouMusicApi)）|
@@ -85,7 +85,7 @@ pnpm verify:device --console 8 "location.hash"   # 顺带收集 8 秒 console
 src/
 ├─ mobile/                  全新 UI
 │  ├─ design/               设计令牌（tokens.css / theme.ts）
-│  ├─ components/           自研基础组件（Sheet / ToastHost / SongRow / …）
+│  ├─ components/           基础组件（Sheet / ToastHost / SongRow / …）
 │  ├─ shell/                底部栏 + 主页子页签
 │  ├─ features/             按域分包（home / player / search / profile / settings / …）
 │  ├─ adapters/             唯一允许触碰内核 store 的层
@@ -106,7 +106,7 @@ docs/                       架构说明与已知缺口
 ## 关键设计决定
 
 - **不用 Tailwind。** 它的工具类依赖构建期扫描源码目录，一旦扫描范围不含内核目录就会
-  **静默退化**（页面布局全塌但不报错）。这里全部用语义化 CSS 变量 + 自研组件样式。
+  **静默退化**（页面布局全塌但不报错）。这里全部用语义化 CSS 变量 + 组件样式。
 - **CSS 基线是 Chrome 110。** 不用 `color-mix()`（Chrome 111 才有）—— 旧 WebView 上
   整条声明失效、退化成白底白字且不报错。需要透明度就预先算好写 `rgba`。
   `scripts/check-css-compat.mjs` 守卫这条。
