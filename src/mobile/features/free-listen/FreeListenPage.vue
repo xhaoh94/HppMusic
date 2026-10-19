@@ -271,14 +271,9 @@ onMounted(() => void load());
         </button>
       </div>
 
-      <button
-        type="button"
-        class="refresh-button"
-        :disabled="loading"
-        aria-label="换一批"
-        @click="refresh"
-      >
-        <Icon :icon="iconRefresh" width="18" height="18" :class="{ spin: loading }" />
+      <!-- 播放全部放在搜索框右侧（与「我喜欢」页签一致），换一批挪到列表头上 -->
+      <button v-if="displayedSongs.length" type="button" class="play-all" @click="playAll">
+        播放全部
       </button>
     </div>
 
@@ -295,7 +290,7 @@ onMounted(() => void load());
       <EmptyState
         v-else-if="!songs.length"
         title="暂时没有免费歌曲"
-        description="稍后再试，或者点右上角换一批"
+        description="稍后再试，或者点列表上方换一批"
       />
       <EmptyState
         v-else-if="!displayedSongs.length"
@@ -308,7 +303,15 @@ onMounted(() => void load());
       <template v-else>
         <div class="list-head">
           <span class="list-count">{{ displayedSongs.length }} 首</span>
-          <button type="button" class="play-all" @click="playAll">播放全部</button>
+          <button
+            type="button"
+            class="refresh-button"
+            :disabled="loading"
+            aria-label="换一批"
+            @click="refresh"
+          >
+            <Icon :icon="iconRefresh" width="18" height="18" :class="{ spin: loading }" />
+          </button>
         </div>
         <SongRow
           v-for="(song, index) in displayedSongs"
@@ -373,12 +376,13 @@ onMounted(() => void load());
 }
 
 .refresh-button {
-  flex: 0 0 40px;
+  /* 挪到列表头里了，做成紧凑图标钮，不把那一行撑高 */
+  flex: 0 0 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 32px;
+  height: 32px;
   border-radius: 50%;
   color: var(--text-secondary);
 }
@@ -442,6 +446,7 @@ onMounted(() => void load());
 }
 
 .play-all {
+  flex: 0 0 auto;
   min-height: 32px;
   padding: 0 var(--sp-4);
   border-radius: var(--radius-pill);

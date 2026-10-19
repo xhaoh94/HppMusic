@@ -67,7 +67,7 @@ watch(
  */
 const CACHED_PAGES = [
   'HomePage', 'FreeListenPage', 'ListenTogetherPage', 'ExplorePage',
-  'PersonalFmPage', 'PurchasedPage',
+  'PersonalFmPage', 'PurchasedPage', 'LikedPlaylistPage',
 ];
 
 // 仅为让路由变化触发重渲染：KeepAlive 自己会处理缓存，这里只需要它在切页时生效

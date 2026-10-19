@@ -38,6 +38,9 @@ const isLoading = computed(() => playlist.favoritesLoading && !playlist.favorite
 const load = async (force = false) => {
   loadError.value = '';
   try {
+    // 先确保「我喜欢」歌单信息就绪。缺了它 fetchLikedPlaylistSongs 会直接把收藏置空
+    // 并标记成"已加载"，之后不带 force 的调用永远拿到空列表 —— 就是"有时候刷不出来"。
+    await playlist.ensureLikedPlaylistReady();
     await playlist.fetchLikedPlaylistSongs(force);
   } catch (error) {
     logger.warn('Favorites', 'Load favorites failed', error);

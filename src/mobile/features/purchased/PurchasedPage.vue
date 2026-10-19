@@ -8,7 +8,6 @@
 import { computed, onScopeDispose, ref, watch, type Ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useRouter } from 'vue-router';
-import PageHeader from '@mobile/components/PageHeader.vue';
 import SongRow from '@mobile/components/SongRow.vue';
 import MediaCard from '@mobile/components/MediaCard.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
@@ -209,20 +208,7 @@ const albumSubtitle = (album: AlbumMeta) => {
 
 <template>
   <div class="purchased-page">
-    <PageHeader title="已购音乐">
-      <template #actions>
-        <button
-          type="button"
-          class="header-refresh"
-          :disabled="isRefreshing"
-          aria-label="刷新已购音乐"
-          @click="refreshPurchased"
-        >
-          <Icon :icon="iconRefresh" width="18" height="18" :class="{ spin: isRefreshing }" />
-        </button>
-      </template>
-    </PageHeader>
-
+    <!-- 刷新并入第一个分区标题行：单开一行只有个图标太浪费纵向空间 -->
     <div v-if="!user.isLoggedIn" class="page-body scroll-y">
       <EmptyState
         title="登录后查看已购音乐"
@@ -237,6 +223,15 @@ const albumSubtitle = (album: AlbumMeta) => {
         <div class="section-heading">
           <h2>已购单曲</h2>
           <span v-if="songs.total.value !== null" class="section-count">{{ songs.total.value }} 首</span>
+          <button
+            type="button"
+            class="header-refresh"
+            :disabled="isRefreshing"
+            aria-label="刷新已购音乐"
+            @click="refreshPurchased"
+          >
+            <Icon :icon="iconRefresh" width="18" height="18" :class="{ spin: isRefreshing }" />
+          </button>
         </div>
 
         <EmptyState
@@ -349,9 +344,9 @@ const albumSubtitle = (album: AlbumMeta) => {
 
 .section-heading {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: var(--sp-2);
-  padding: 0 var(--sp-4) var(--sp-2);
+  padding: var(--sp-1) var(--sp-4) var(--sp-2);
 }
 
 .section-heading h2 {
@@ -390,8 +385,10 @@ const albumSubtitle = (album: AlbumMeta) => {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  /* 标题行内的小图标按钮：30px 刚好不把行高撑起来 */
+  margin-left: auto;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   color: var(--text-primary);
 }

@@ -71,6 +71,7 @@ import * as tablerPlus from '@iconify/icons-tabler/plus';
 import * as tablerQrcode from '@iconify/icons-tabler/qrcode';
 import * as tablerRefresh from '@iconify/icons-tabler/refresh';
 import * as tablerRepeat from '@iconify/icons-tabler/repeat';
+import * as tablerRepeatOff from '@iconify/icons-tabler/repeat-off';
 import * as tablerRepeatOnce from '@iconify/icons-tabler/repeat-once';
 import * as tablerSearch from '@iconify/icons-tabler/search';
 import * as tablerSettings from '@iconify/icons-tabler/settings';
@@ -156,6 +157,7 @@ export const plus = icon(tablerPlus, 'plus');
 export const qrcode = icon(tablerQrcode, 'qrcode');
 export const refresh = icon(tablerRefresh, 'refresh');
 export const repeat = icon(tablerRepeat, 'repeat');
+export const repeatOff = icon(tablerRepeatOff, 'repeat-off');
 export const repeatOnce = icon(tablerRepeatOnce, 'repeat-once');
 export const search = icon(tablerSearch, 'search');
 export const settings = icon(tablerSettings, 'settings');
@@ -252,6 +254,8 @@ export const iconMessageCircle = messageCircle;
 /* ── 播放模式（用图标而不是文字） ── */
 export const iconRepeat = repeat;
 export const iconRepeatOnce = repeatOnce;
+/** 顺序播放：播到队尾即停，用「不循环」图标与列表循环区分开 */
+export const iconRepeatOff = repeatOff;
 export const iconShuffle = arrowsShuffle;
 
 /* ── 个人资料编辑 ── */

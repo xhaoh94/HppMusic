@@ -71,6 +71,7 @@ import {
   iconPrevious,
   iconQueue,
   iconRepeat,
+  iconRepeatOff,
   iconRepeatOnce,
   iconShuffle,
 } from '@mobile/icons';
@@ -152,8 +153,20 @@ const barrageHash = computed(() => String(track.value?.hash ?? ''));
 const playModeIcon = computed(() => {
   if (playMode.value === 'single') return iconRepeatOnce;
   if (playMode.value === 'random') return iconShuffle;
+  if (playMode.value === 'sequential') return iconRepeatOff;
   return iconRepeat;
 });
+
+/**
+ * 切换播放模式并立刻回显结果。
+ * 三档循环（列表循环 / 单曲循环 / 随机播放），光看图标易混，用一小段提示明确当前档位。
+ * 时长压到 1.2s：够看清，又不至于挡在按钮上。
+ */
+const onCyclePlayMode = () => {
+  cyclePlayMode();
+  // cycle 里同步写 state.playMode，这里读到的 label 已是切换后的模式
+  toast.mini(playModeLabel.value, 'info', 1200);
+};
 
 /* ── 进度 ── */
 const queueOpen = ref(false);
@@ -339,7 +352,7 @@ onBeforeUnmount(() => {
           type="button"
           class="transport-button is-small"
           :aria-label="playModeLabel"
-          @click="cyclePlayMode()"
+          @click="onCyclePlayMode"
         >
           <Icon :icon="playModeIcon" width="22" height="22" />
         </button>

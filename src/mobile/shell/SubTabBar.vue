@@ -6,7 +6,7 @@
  * 右侧只放「自定义页签」，搜索入口不做成按钮 —— 它已经是主页磁贴里的入口之一，
  * 两处并存容易让人以为是两个不同的搜索。
  */
-import { ref } from 'vue';
+import { nextTick, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import Sheet from '@mobile/components/Sheet.vue';
@@ -25,6 +25,21 @@ const router = useRouter();
 
 const editorOpen = ref(false);
 const editorHint = ref('');
+const tabList = ref<HTMLElement | null>(null);
+
+// 选中页签自动滚入可见区：页签多了（可自选开关）横向一滚，当前页可能被划出屏幕 ——
+// 左右滑切换时尤其明显（高亮变了、页签本身却看不见）。用 inline:center 保证整枚可见。
+watch(
+  () => route.path,
+  () => {
+    nextTick(() => {
+      tabList.value
+        ?.querySelector<HTMLElement>('.tab.is-active')
+        ?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' });
+    });
+  },
+  { immediate: true },
+);
 
 const isActive = (tab: HomeTab) =>
   route.path === tab.path || route.path.startsWith(`${tab.path}/`);
@@ -46,7 +61,7 @@ const onReset = () => {
 
 <template>
   <header class="sub-tab-bar">
-    <nav class="tab-list scroll-x" aria-label="主页页签">
+    <nav ref="tabList" class="tab-list scroll-x" aria-label="主页页签">
       <button
         v-for="tab in homeTabs"
         :key="tab.key"

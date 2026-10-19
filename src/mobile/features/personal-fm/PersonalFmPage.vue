@@ -3,7 +3,6 @@ import { computed, onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
-import PageHeader from '@mobile/components/PageHeader.vue';
 import SongRow from '@mobile/components/SongRow.vue';
 import {
   iconClose,
@@ -87,7 +86,7 @@ onMounted(() => {
 
 <template>
   <div class="personal-fm-page">
-    <PageHeader title="私人 FM" />
+    <!-- 不放 PageHeader：页面在「主页」分区下，顶部子页签栏已表明位置（同一听页同样处理） -->
 
     <div class="personal-fm-body scroll-y">
       <EmptyState

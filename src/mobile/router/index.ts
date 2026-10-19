@@ -68,7 +68,7 @@ export const router = createRouter({
       path: '/main/liked-playlist',
       name: 'liked-playlist',
       component: () => import('@mobile/features/favorites/LikedPlaylistPage.vue'),
-      meta: { section: 'main', title: '我喜欢的歌单' },
+      meta: { section: 'main', title: '我喜欢' },
     },
 
     {

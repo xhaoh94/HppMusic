@@ -480,7 +480,7 @@ export const formatTime = (seconds: number): string => {
   return `${minutes}:${String(remainder).padStart(2, '0')}`;
 };
 
-export const PLAY_MODE_ORDER: PlayMode[] = ['list', 'single', 'random', 'sequential'];
+export const PLAY_MODE_ORDER: PlayMode[] = ['list', 'single', 'random'];
 
 export const PLAY_MODE_LABELS: Record<PlayMode, string> = {
   list: '列表循环',

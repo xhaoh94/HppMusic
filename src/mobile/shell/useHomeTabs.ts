@@ -21,7 +21,7 @@ export const HOME_TAB_CATALOG: readonly HomeTab[] = [
   { key: 'explore', title: '探索', path: '/main/explore' },
   { key: 'personal-fm', title: '私人 FM', path: '/main/personal-fm' },
   { key: 'purchased', title: '已购音乐', path: '/main/purchased' },
-  { key: 'liked-playlist', title: '我喜欢的歌单', path: '/main/liked-playlist' },
+  { key: 'liked-playlist', title: '我喜欢', path: '/main/liked-playlist' },
 ];
 
 const DEFAULT_TABS = ['home', 'free-listen'];

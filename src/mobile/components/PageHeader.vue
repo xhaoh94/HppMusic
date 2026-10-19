@@ -80,6 +80,8 @@ const containerClass = computed(() => [`is-${route.meta.section ?? 'page'}`]);
 }
 
 .page-actions {
+  /* 无标题时（主页页签页：页签栏已经有名字）靠右，不留在左边孤零零 */
+  margin-left: auto;
   flex: 0 0 auto;
   display: flex;
   align-items: center;
