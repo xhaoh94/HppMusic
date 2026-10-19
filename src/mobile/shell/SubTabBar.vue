@@ -51,6 +51,13 @@ const go = (path: string) => {
 
 const onToggle = (key: string) => {
   editorHint.value = toggleHomeTab(key);
+  // 关掉的正好是当前页签时，路由会被悬空（页签栏无高亮、左右滑也找不到位置）——
+  // 这里主动跳到第一个仍启用的页签。
+  const stillVisible = homeTabs.value.some(
+    (tab) => route.path === tab.path || route.path.startsWith(`${tab.path}/`),
+  );
+  const fallback = homeTabs.value[0];
+  if (!stillVisible && fallback) void router.replace(fallback.path);
 };
 
 const onReset = () => {

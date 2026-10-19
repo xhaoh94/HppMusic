@@ -129,3 +129,36 @@ describe('已购分页', () => {
     await expect(getPurchasedSongsPage(2)).rejects.toThrow('登录已过期');
   });
 });
+
+describe('已购去重不丢数据', () => {
+  it('缺 hash/id 的单曲不会被丢弃，而是回退到「歌名+歌手」', async () => {
+    const { dedupePurchasedSongs, purchasedSongKey } = await import(
+      '../src/mobile/adapters/purchased'
+    );
+    const noId = { id: '', hash: '', title: '无标识歌曲', name: '无标识歌曲', artist: '某歌手', album: '', duration: 100, coverUrl: '', audioUrl: '', mixSongId: '' } as any;
+    const key = purchasedSongKey(noId, 0);
+    expect(key).not.toBe('');
+    expect(key.startsWith('soft:')).toBe(true);
+    expect(dedupePurchasedSongs([noId])).toHaveLength(1);
+  });
+
+  it('两条元数据全空的行不会被压成一条（行号兜底）', async () => {
+    const { dedupePurchasedSongs, purchasedSongKey } = await import(
+      '../src/mobile/adapters/purchased'
+    );
+    const empty = () => ({ id: '', hash: '', title: '', name: '', artist: '', album: '', duration: 0, coverUrl: '', audioUrl: '', mixSongId: '' }) as any;
+    expect(purchasedSongKey(empty(), 0)).toBe('row:0');
+    expect(purchasedSongKey(empty(), 1)).toBe('row:1');
+    expect(dedupePurchasedSongs([empty(), empty()])).toHaveLength(2);
+  });
+
+  it('缺 id 的多张专辑不会被合并成一条，同 id 仍然去重', async () => {
+    const { dedupePurchasedAlbums, purchasedAlbumKey } = await import(
+      '../src/mobile/adapters/purchased'
+    );
+    const noIdAlbum = (name: string) => ({ id: 0, name, singerName: '歌手' }) as any;
+    expect(purchasedAlbumKey(noIdAlbum('甲'))).not.toBe(purchasedAlbumKey(noIdAlbum('乙')));
+    expect(dedupePurchasedAlbums([noIdAlbum('甲'), noIdAlbum('乙')])).toHaveLength(2);
+    expect(dedupePurchasedAlbums([noIdAlbum('甲'), noIdAlbum('甲')])).toHaveLength(1);
+  });
+});

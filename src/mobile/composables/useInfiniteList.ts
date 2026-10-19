@@ -21,7 +21,7 @@
  * 4. **错误可重试且不丢已加载内容**：失败只置 error，保留 items，
  *    用户点重试继续加载下一页，而不是回到空列表从头再来。
  */
-import { computed, ref, watch, type Ref } from 'vue';
+import { computed, nextTick, ref, watch, type Ref } from 'vue';
 
 export interface InfiniteListLoader<T> {
   (page: number): Promise<{ items: T[]; hasMore: boolean; total?: number | null }>;
@@ -50,8 +50,26 @@ export const useInfiniteList = <T>(
   const sentinel = ref<HTMLElement | null>(null);
   /** 每次 reload 递增；异步回来时代际不符就丢弃结果 */
   let generation = 0;
+  /** 上一页实际追加了多少条：为 0 时不能再自动继续（否则空页会死循环） */
+  let lastPageAdded = 0;
 
   const isEmpty = computed(() => !isLoading.value && !error.value && items.value.length === 0);
+
+  /**
+   * 哨兵仍在视口内就继续拉下一页。
+   *
+   * `IntersectionObserver` 只在相交状态**变化**时回调：追加的一页若没把哨兵
+   * 推出视口（末页只剩 1~2 行、平板/横屏高视口），它会一直“相交中”，
+   * 之后再也不会触发 —— 自动加载就停在那里。这里在每次加载结束后重新量一次。
+   */
+  const continueIfSentinelVisible = async () => {
+    if (!hasMore.value || error.value || lastPageAdded === 0) return;
+    await nextTick();
+    const element = sentinel.value;
+    if (!element) return;
+    if (element.getBoundingClientRect().top > window.innerHeight + 240) return;
+    void loadMore();
+  };
 
   const run = async (targetPage: number, mode: 'replace' | 'append') => {
     if (isLoading.value || isLoadingMore.value) return;
@@ -70,6 +88,7 @@ export const useInfiniteList = <T>(
       page.value = targetPage;
       hasMore.value = result.hasMore;
       total.value = result.total ?? null;
+      lastPageAdded = result.items.length;
     } catch (caught) {
       if (currentGeneration !== generation) return;
       error.value = caught instanceof Error ? caught.message : String(caught);
@@ -77,6 +96,7 @@ export const useInfiniteList = <T>(
       if (currentGeneration === generation) {
         isLoading.value = false;
         isLoadingMore.value = false;
+        void continueIfSentinelVisible();
       }
     }
   };
@@ -91,6 +111,7 @@ export const useInfiniteList = <T>(
     error.value = '';
     isLoading.value = false;
     isLoadingMore.value = false;
+    lastPageAdded = 0;
     return run(1, 'replace');
   };
 

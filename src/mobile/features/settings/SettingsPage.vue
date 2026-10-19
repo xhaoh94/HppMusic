@@ -28,8 +28,7 @@
  *              preventSleep / cache* / proxy* / dpi* / shortcut* / window*
  * ══════════════════════════════════════════════════════════════
  */
-import { computed, onMounted, ref } from 'vue';
-import PageHeader from '@mobile/components/PageHeader.vue';
+import { computed, onMounted, ref } from 'vue';import PageHeader from '@mobile/components/PageHeader.vue';
 import Sheet from '@mobile/components/Sheet.vue';
 import SettingsSection from '@mobile/components/settings/SettingsSection.vue';
 import SwitchRow from '@mobile/components/settings/SwitchRow.vue';
@@ -41,12 +40,52 @@ import { useSettingStore } from '@/stores/setting';
 import { useLyricStore } from '@/stores/lyric';
 import { useToastStore } from '@/stores/toast';
 import type { AudioQualityValue } from '@/types';
+import { useAppUpdate } from '@mobile/composables/useAppUpdate';
+import { formatBytes } from '@mobile/adapters/appUpdate';
 
 const setting = useSettingStore();
 const lyric = useLyricStore();
 const toast = useToastStore();
 
 const version = ref('');
+
+/* ── 更新 ── */
+const update = useAppUpdate();
+const updateOpen = ref(false);
+
+/** 关于分区里「检查更新」右侧提示：不失败时不刷红色，只给一句状态。 */
+const updateHint = computed(() => {
+  switch (update.phase.value) {
+    case 'checking':
+      return '检查中…';
+    case 'available':
+    case 'downloading':
+    case 'paused':
+    case 'downloaded':
+      return update.info.value?.version ?? '';
+    case 'latest':
+      return '已是最新';
+    default:
+      return '';
+  }
+});
+
+const openUpdate = async () => {
+  updateOpen.value = true;
+  // 已经在下载/已下载时再点开不需要重新检查（会把进度状态冲掉）。
+  if (['downloading', 'paused', 'downloaded'].includes(update.phase.value)) return;
+  await update.check({
+    currentVersion: version.value,
+    includePrerelease: setting.checkPrerelease,
+    proxyUrl: setting.githubProxyUrl,
+  });
+};
+
+const startUpdateDownload = () => void update.download();
+const installUpdate = () => void update.install();
+
+const updateSizeText = computed(() => formatBytes(update.totalBytes.value || update.info.value?.size || 0));
+const updateDownloadedText = computed(() => formatBytes(update.downloadedBytes.value));
 
 /* ── 外观 ── */
 const themeOptions: { value: ThemePreference; label: string }[] = [
@@ -91,14 +130,8 @@ const conversionMode = computed({
 /* ── 数据 / 关于 ── */
 const resetOpen = ref(false);
 
-const clearSearchHistory = () => {
-  if (!setting.searchHistory.length) {
-    toast.info('搜索历史已经是空的');
-    return;
-  }
-  setting.clearSearchHistory();
-  toast.success('已清空搜索历史');
-};
+/** 移动端自己的 localStorage 偏好（不归 storage 桥的 echo.mobile.* 命名空间管） */
+const MOBILE_PREFERENCE_KEYS = ['hpp.theme', 'hpp.homeTabs', 'hppmusic:playback-prefs'];
 
 /**
  * 清除全部本地数据。
@@ -111,6 +144,15 @@ const resetAll = async () => {
   resetOpen.value = false;
   try {
     await window.electron?.storage?.resetAll?.();
+    // 桥只清自己的 `echo.mobile.*` 命名空间；移动端自有的三个偏好用的是 hpp 前缀，
+    // 不在这里一并删掉的话，重载后主题/同时播放/页签配置都还在，用户会以为“没清掉”。
+    for (const key of MOBILE_PREFERENCE_KEYS) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        /* 单个 key 删不掉不影响整体流程 */
+      }
+    }
     toast.success('已清除本地数据，即将重启界面');
     window.setTimeout(() => window.location.reload(), 600);
   } catch (error) {
@@ -137,7 +179,7 @@ onMounted(async () => {
         <SegmentedRow v-model="themeValue" label="主题" :options="themeOptions" />
       </SettingsSection>
 
-      <SettingsSection title="播放">
+      <SettingsSection title="播放" default-collapsed>
         <SwitchRow
           v-model="setting.autoPlayOnLaunch"
           label="启动时自动播放"
@@ -156,7 +198,7 @@ onMounted(async () => {
         />
       </SettingsSection>
 
-      <SettingsSection title="音质">
+      <SettingsSection title="音质" default-collapsed>
         <SegmentedRow
           v-model="setting.defaultAudioQuality"
           label="默认音质"
@@ -171,7 +213,7 @@ onMounted(async () => {
         行为不变；要恢复入口把这两行加回来即可。
       -->
 
-      <SettingsSection title="歌词">
+      <SettingsSection title="歌词" default-collapsed>
         <SegmentedRow v-model="lyricScale" label="歌词字号" :options="lyricScaleOptions" />
         <!-- 翻译/音译：写的是内核 lyric store 的 wantTranslation/wantRomanization
              （在 persist pick 列表里，切歌不重置）。store 的 lyricsMode 会自动按
@@ -196,12 +238,10 @@ onMounted(async () => {
         -->
       </SettingsSection>
 
-      <SettingsSection title="数据">
-        <ActionRow
-          label="清空搜索历史"
-          :value="`${setting.searchHistory.length} 条`"
-          @click="clearSearchHistory"
-        />
+      <!--
+        末尾这两组标题已恢复（用户要求）；所有分组都可点击标题折叠。
+      -->
+      <SettingsSection title="数据" default-collapsed>
         <ActionRow
           tone="danger"
           label="清除本地数据"
@@ -209,8 +249,9 @@ onMounted(async () => {
         />
       </SettingsSection>
 
-      <SettingsSection title="关于">
+      <SettingsSection title="关于" default-collapsed>
         <ActionRow label="版本" :value="version || '—'" disabled />
+        <ActionRow label="检查更新" :value="updateHint" @click="openUpdate" />
         <ActionRow label="平台" value="Android" disabled />
       </SettingsSection>
 
@@ -220,6 +261,88 @@ onMounted(async () => {
       </p>
     </div>
   </div>
+
+  <Sheet v-model="updateOpen" title="应用更新">
+    <div class="update-body">
+      <p v-if="update.phase.value === 'checking'" class="confirm-text">正在检查更新…</p>
+
+      <p v-else-if="update.phase.value === 'latest'" class="confirm-text">
+        已是最新版本（当前 {{ version || '—' }}）
+      </p>
+
+      <p v-else-if="update.phase.value === 'error' && !update.info.value" class="confirm-text">
+        {{ update.error.value || '检查更新失败' }}
+      </p>
+
+      <template v-else-if="update.info.value">
+        <p class="update-version">新版本 {{ update.info.value.version }}</p>
+        <p class="update-meta">
+          <span v-if="updateSizeText">{{ updateSizeText }}</span>
+          <span v-if="update.info.value.publishedAt">· {{ update.info.value.publishedAt.slice(0, 10) }}</span>
+        </p>
+
+        <div v-if="['downloading', 'paused', 'downloaded'].includes(update.phase.value)" class="progress">
+          <div class="progress-track">
+            <div class="progress-fill" :style="{ width: `${update.percent.value}%` }" />
+          </div>
+          <p class="progress-text">
+            <span v-if="update.phase.value === 'downloaded'">下载完成</span>
+            <span v-else-if="update.phase.value === 'paused'">等待网络，系统会自动续传</span>
+            <span v-else>{{ update.percent.value }}%</span>
+            <span v-if="update.phase.value !== 'downloaded'">
+              {{ updateDownloadedText }} / {{ updateSizeText }}
+            </span>
+          </p>
+        </div>
+
+        <p v-if="update.phase.value === 'error'" class="update-error">
+          {{ update.error.value }}
+        </p>
+
+        <pre v-if="update.info.value.notes && update.phase.value === 'available'" class="update-notes">{{
+          update.info.value.notes
+        }}</pre>
+      </template>
+    </div>
+
+    <template #footer>
+      <div class="confirm-actions">
+        <button type="button" class="ghost-button" @click="updateOpen = false">关闭</button>
+        <button
+          v-if="update.phase.value === 'downloaded'"
+          type="button"
+          class="primary-button"
+          @click="installUpdate"
+        >
+          安装
+        </button>
+        <button
+          v-else-if="update.phase.value === 'downloading' || update.phase.value === 'paused'"
+          type="button"
+          class="primary-button"
+          @click="updateOpen = false"
+        >
+          后台下载
+        </button>
+        <button
+          v-else-if="update.phase.value === 'available' || (update.phase.value === 'error' && update.info.value)"
+          type="button"
+          class="primary-button"
+          @click="startUpdateDownload"
+        >
+          {{ update.phase.value === 'error' ? '重新下载' : '下载并安装' }}
+        </button>
+        <button
+          v-else-if="!update.info.value && update.phase.value !== 'checking'"
+          type="button"
+          class="primary-button"
+          @click="openUpdate"
+        >
+          重新检查
+        </button>
+      </div>
+    </template>
+  </Sheet>
 
   <Sheet v-model="resetOpen" title="清除本地数据">
     <p class="confirm-text">
@@ -278,6 +401,82 @@ onMounted(async () => {
 .ghost-button {
   color: var(--text-secondary);
   background: var(--fill-subtle);
+}
+
+.primary-button {
+  color: var(--accent-on);
+  background: var(--accent);
+}
+
+/* ── 更新面板 ── */
+.update-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.update-version {
+  margin: 0;
+  font-size: var(--font-lg);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+
+.update-meta {
+  margin: 0;
+  display: flex;
+  gap: var(--sp-2);
+  font-size: var(--font-sm);
+  color: var(--text-tertiary);
+}
+
+.update-error {
+  margin: 0;
+  font-size: var(--font-sm);
+  color: var(--danger);
+}
+
+.progress {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+}
+
+.progress-track {
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--fill-muted);
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--duration-normal) var(--ease-standard);
+}
+
+.progress-text {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  font-size: var(--font-xs);
+  color: var(--text-tertiary);
+}
+
+.update-notes {
+  margin: var(--sp-2) 0 0;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--fill-subtle);
+  font-family: inherit;
+  font-size: var(--font-sm);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .danger-button {

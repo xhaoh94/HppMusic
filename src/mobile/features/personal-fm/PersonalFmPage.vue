@@ -68,8 +68,11 @@ const next = () => runAction(nextFm);
 const dislike = () => runAction(dislikeFm);
 const toggleFavorite = () =>
   runAction(async () => {
+    const wasFavorite = isFavorite.value;
     const changed = await toggleFmFavorite();
-    if (changed) toast.success('已收藏');
+    // toggleFavorite 返回的是“切换后的状态”：取消收藏时为 false，不能只提示收藏成功。
+    if (wasFavorite) toast.info('已取消收藏');
+    else if (changed) toast.success('已收藏');
     return changed;
   });
 

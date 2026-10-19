@@ -47,8 +47,9 @@ const emit = defineEmits<{ click: [] }>();
   align-items: center;
   gap: var(--sp-3);
   width: 100%;
-  min-height: 56px;
-  padding: var(--sp-2) 0;
+  /* 48dp 是安卓触屏最小点击尺寸；原来 56 再加 8px 上下 padding，行间空白明显偏大 */
+  min-height: 48px;
+  padding: 0;
   text-align: left;
 }
 

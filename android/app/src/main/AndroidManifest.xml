@@ -93,6 +93,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <!-- Android 13+ 通知需运行时授权；播放通知没有它就不显示（音乐照常播） -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 应用内更新：安装 APK 需要声明（Android 8+ 还要用户手动允许“安装未知应用”） -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- 听歌识曲用麦克风（功能后续接入，权限先声明避免届时要改清单） -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!--

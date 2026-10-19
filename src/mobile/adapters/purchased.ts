@@ -119,15 +119,18 @@ const readExplicitHasMore = (records: readonly RecordLike[]): boolean | null => 
   return null;
 };
 
-const pageTotal = (payload: unknown): number | null =>
-  firstNumber(recordsForMetadata(payload), [
-    'total',
-    'total_count',
-    'totalCount',
-    'counts',
-    'count',
-    'num',
-  ]);
+/**
+ * 总条数。
+ *
+ * ⚠️ 只认明确表达“总数”的字段：`count` / `num` 在酷狗这些容器里通常是
+ * **本页返回条数**，当成总数会让分页在第一页就判定“没有更多”（同时页面还显示
+ * “30 首”）。拿不到总数时交给本页长度兜底（见 buildPage）。
+ */
+const pageTotal = (payload: unknown): number | null => {
+  const total = firstNumber(recordsForMetadata(payload), ['total', 'total_count', 'totalCount']);
+  if (total !== null && total > 0) return total;
+  return null;
+};
 
 const hasFailedStatus = (payload: unknown): boolean => {
   const root = asRecord(payload);
@@ -180,20 +183,46 @@ export const mapPurchasedSong = (value: unknown): Song => mapTopSong(value);
 
 export const mapPurchasedAlbum = (value: unknown): AlbumMeta => mapAlbumMeta(value);
 
-export const purchasedSongKey = (song: Song): string =>
-  String(song.mixSongId || song.hash || song.songId || song.id || '').trim();
+/**
+ * 单曲去重键。
+ *
+ * ⚠️ 绝不能返回空串：`dedupe` 会把空 key 当作“无法识别”直接 `continue`，
+ * 于是上游缺 hash/id 的条目会被**静默丢掉**（用户看到已购列表少了几首，却没有任何提示）。
+ * 所以逐级回退到「歌名+歌手」、「行号」，至少保证条目还在。
+ */
+export const purchasedSongKey = (song: Song, index = -1): string => {
+  const stable = String(song.mixSongId || song.hash || song.songId || song.id || '').trim();
+  if (stable && stable !== '0') return `id:${stable}`;
+  const soft = [song.name || song.title, song.artist, song.albumName || song.album]
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+    .join('\u0000');
+  return soft ? `soft:${soft}` : `row:${index}`;
+};
 
-export const purchasedAlbumKey = (album: AlbumMeta): string =>
-  String(album.id || album.albumid || album.album_id || `${album.name}\u0000${album.singerName}`)
-    .trim()
-    .toLowerCase();
+/**
+ * 专辑去重键。
+ *
+ * `mapAlbumMeta` 缺 id 时会补成 `0`（falsy），旧实现直接拼 `${id}\u0000${name}\u0000${singer}`，
+ * 缺元数据时得到同一个 `"undefined\u0000undefined"` → 多张专辑被合并成一条。
+ * 这里把 id=0 当作“没有 id”，再回退到名称/行号。
+ */
+export const purchasedAlbumKey = (album: AlbumMeta, index = -1): string => {
+  const id = String(album.id || album.albumid || album.album_id || '').trim();
+  if (id && id !== '0') return `id:${id}`;
+  const soft = [album.name, album.singerName]
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+    .join('\u0000');
+  return soft ? `soft:${soft}` : `row:${index}`;
+};
 
-const dedupe = <T>(items: readonly T[], keyOf: (item: T) => string): T[] => {
+const dedupe = <T>(items: readonly T[], keyOf: (item: T, index: number) => string): T[] => {
   const seen = new Set<string>();
   const result: T[] = [];
-  for (const item of items) {
-    const key = keyOf(item);
-    if (!key || seen.has(key)) continue;
+  for (const [index, item] of items.entries()) {
+    const key = keyOf(item, index);
+    if (seen.has(key)) continue;
     seen.add(key);
     result.push(item);
   }

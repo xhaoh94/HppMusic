@@ -65,7 +65,8 @@ const switchToNeighborTab = (direction: 1 | -1) => {
 };
 
 const onShellTouchStart = (event: TouchEvent) => {
-  touchState.armed = subTabVisible.value;
+  // 多指（双指缩放等）不参与切页签：否则第二根手指会覆盖起点，抬手时误判成横滑。
+  touchState.armed = subTabVisible.value && event.touches.length === 1;
   if (!touchState.armed) return;
   touchState.startX = event.touches[0].clientX;
   touchState.startY = event.touches[0].clientY;
@@ -86,13 +87,21 @@ const onShellTouchEnd = (event: TouchEvent) => {
   switchToNeighborTab(dx < 0 ? 1 : -1);
 };
 
+/** 系统手势接管（touchcancel）时复位，避免 armed 残留到下一次手势。 */
+const onShellTouchCancel = () => {
+  touchState.armed = false;
+};
+
 /** 页面内容区：切页时在它身上播一次入场动画。 */
 const contentRef = ref<HTMLElement | null>(null);
 /**
  * 当前正在播的入场动画（必须走响应式绑定）。
- * '' = 不动画；'tab' = 页签左右切；'player' = 播放页从下方升起。
+ * '' = 不动画；'tab-next' / 'tab-prev' = 页签向左/向右切；'player' = 播放页从下方升起。
  */
-const pageTransition = ref<'' | 'tab' | 'player'>('');
+const pageTransition = ref<'' | 'tab-next' | 'tab-prev' | 'player'>('');
+
+/** 上一个主页分区路径，用来判断页签是往前还是往后切（决定入场方向）。 */
+let lastSectionPath = '';
 
 /**
  * 播放一次入场动画。
@@ -104,7 +113,7 @@ const pageTransition = ref<'' | 'tab' | 'player'>('');
  * ⚠️ class 必须通过响应式绑定加，不能直接 `classList.add`：模板上已有 `:class`，
  * Vue 每次 patch 会把整个 className 重写一遍，手动加的 class 会被抹掉（实测动画从未生效）。
  */
-const playPageTransition = async (kind: 'tab' | 'player') => {
+const playPageTransition = async (kind: '' | 'tab-next' | 'tab-prev' | 'player') => {
   pageTransition.value = '';
   // 先让 Vue 把 class 去掉，再强制重排，最后重新打开，连点两个页签也能每次看到动画
   await nextTick();
@@ -112,15 +121,30 @@ const playPageTransition = async (kind: 'tab' | 'player') => {
   pageTransition.value = kind;
 };
 
+/** 根据页签在目录里的相对位置判断方向：往后切内容从右进、往前切从左进。 */
+const resolveTabDirection = (path: string): 'tab-next' | 'tab-prev' => {
+  const tabs = homeTabs.value;
+  const from = tabs.findIndex((tab) => tab.path === lastSectionPath);
+  const to = tabs.findIndex((tab) => tab.path === path);
+  if (from < 0 || to < 0) return 'tab-next';
+  return to < from ? 'tab-prev' : 'tab-next';
+};
+
 watch(
   () => route.path,
-  () => {
+  (path) => {
     // 页签（主页分区 / 我的）横向切；播放页从下方升起；
     // 登录页、搜索结果、详情页这类入栈导航不做位移（它们有自己的交互语义）。
-    if (route.name === 'player') void playPageTransition('player');
-    else if (route.meta.section === 'main' || route.name === 'profile')
-      void playPageTransition('tab');
-    else pageTransition.value = '';
+    if (route.name === 'player') {
+      void playPageTransition('player');
+    } else if (route.meta.section === 'main') {
+      void playPageTransition(resolveTabDirection(path));
+    } else if (route.name === 'profile') {
+      void playPageTransition('tab-next');
+    } else {
+      pageTransition.value = '';
+    }
+    if (route.meta.section === 'main') lastSectionPath = path;
   },
 );
 
@@ -149,11 +173,13 @@ onMounted(() => {
       :class="{
         'has-sub-tabs': subTabVisible,
         'is-fullscreen': !shellVisible,
-        'is-tab-switching': pageTransition === 'tab',
+        'is-tab-next': pageTransition === 'tab-next',
+        'is-tab-prev': pageTransition === 'tab-prev',
         'is-player-switching': pageTransition === 'player',
       }"
       @touchstart="onShellTouchStart"
       @touchend="onShellTouchEnd"
+      @touchcancel="onShellTouchCancel"
     >
       <slot />
     </main>
@@ -207,8 +233,12 @@ onMounted(() => {
  * 叠加会让缓存页面空白。动画只改 opacity/transform，不参与布局，不会引起跳动；
  * 结束后 transform 回到 none，不影响页面内 absolute/fixed 定位（弹层已 Teleport 到 body）。
  */
-.shell-content.is-tab-switching {
-  animation: shell-tab-in 200ms var(--ease-decelerate);
+.shell-content.is-tab-next {
+  animation: shell-tab-in-next 200ms var(--ease-decelerate);
+}
+
+.shell-content.is-tab-prev {
+  animation: shell-tab-in-prev 200ms var(--ease-decelerate);
 }
 
 /*
@@ -230,7 +260,7 @@ onMounted(() => {
   }
 }
 
-@keyframes shell-tab-in {
+@keyframes shell-tab-in-next {
   from {
     opacity: 0;
     transform: translateX(12px);
@@ -241,9 +271,21 @@ onMounted(() => {
   }
 }
 
+@keyframes shell-tab-in-prev {
+  from {
+    opacity: 0;
+    transform: translateX(-12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* 系统开了“减少动态效果”就不做位移 */
 @media (prefers-reduced-motion: reduce) {
-  .shell-content.is-tab-switching,
+  .shell-content.is-tab-next,
+  .shell-content.is-tab-prev,
   .shell-content.is-player-switching {
     animation: none;
   }

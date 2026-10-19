@@ -29,6 +29,14 @@ const setting = useSettingStore();
 
 const keyword = ref(String(route.query.q ?? ''));
 const inputRef = ref<HTMLInputElement | null>(null);
+/**
+ * 同词重复搜索的信号位。
+ *
+ * 只靠 `router.replace(..., { force: true })` 不会让结果页重新拉取：
+ * `activeKeyword` 字符串没变 → SearchResults 的 key 与 props 都不变 → watch 不触发。
+ * 把它拼进 key，重新搜索才能真正发请求。
+ */
+const searchNonce = ref(0);
 const {
   suggestions,
   cancel: cancelSuggestions,
@@ -41,10 +49,34 @@ const onCompositionEnd = (event: CompositionEvent) => {
   endComposition((event.target as HTMLInputElement).value);
 };
 
+/** 键盘/读屏选中的联想项下标（-1 表示没有选中） */
+const activeSuggestion = ref(-1);
+watch(suggestions, () => {
+  activeSuggestion.value = -1;
+});
+
 const onEnter = (event: KeyboardEvent) => {
   if (!canSubmitOnEnter(event)) return;
   event.preventDefault();
-  submit();
+  // 用上下键选中了某条联想时，回车就搜那一条（外接键盘/读屏场景）
+  const picked = suggestions.value[activeSuggestion.value];
+  submit(picked ?? undefined);
+};
+
+/** 联想列表的键盘导航：上下移动、Esc 关闭。 */
+const onInputKeydown = (event: KeyboardEvent) => {
+  if (!suggestions.value.length) return;
+  if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault();
+    const delta = event.key === 'ArrowDown' ? 1 : -1;
+    const total = suggestions.value.length;
+    activeSuggestion.value = (activeSuggestion.value + delta + total) % total;
+    return;
+  }
+  if (event.key === 'Escape') {
+    cancelSuggestions();
+    activeSuggestion.value = -1;
+  }
 };
 
 /** 当前生效的搜索词（来自路由，而不是输入框 —— 输入框可以边打字边过滤） */
@@ -53,19 +85,24 @@ const activeKeyword = computed(() => String(route.query.q ?? '').trim());
 const hotCategories = ref<HotCategory[]>([]);
 const hotState = ref<'loading' | 'ready' | 'error'>('loading');
 const hotError = ref('');
+let hotGeneration = 0;
 
 const history = computed(() => setting.searchHistory ?? []);
 /** 热搜只需要第一个分类（手机一屏放不下 30 条），其余分类交给「排行榜」 */
 const primaryHot = computed(() => hotCategories.value[0]?.keywords ?? []);
 
 const loadHot = async () => {
+  // 刷新/重试都可能被连点：用代次丢弃晚到的旧响应，避免旧数据覆盖新数据。
+  const generation = ++hotGeneration;
   hotState.value = 'loading';
   hotError.value = '';
   try {
     const categories = await getHotCategories();
+    if (generation !== hotGeneration) return;
     hotCategories.value = categories;
     hotState.value = 'ready';
   } catch (error) {
+    if (generation !== hotGeneration) return;
     logger.warn('Search', 'Load hot categories failed', error);
     hotError.value = error instanceof Error ? error.message : String(error);
     hotState.value = 'error';
@@ -78,8 +115,9 @@ const submit = (value?: string) => {
   cancelSuggestions();
   if (!next) return;
   setting.addToSearchHistory(next);
-  // 同词重复搜索也要重新触发（replace 到同一个 query 不会触发 watch）
+  // 同词重复搜索也要重新触发（replace 到同一个 query 不会让结果重新拉取）
   if (activeKeyword.value === next) {
+    searchNonce.value += 1;
     void router.replace({ name: 'search', query: { q: next }, force: true });
     return;
   }
@@ -131,8 +169,16 @@ onMounted(() => {
         autocomplete="off"
         placeholder="搜索音乐、歌手、专辑"
         aria-label="搜索音乐、歌手、专辑"
+        role="combobox"
+        aria-autocomplete="list"
+        :aria-expanded="suggestions.length > 0"
+        aria-controls="search-suggestion-list"
+        :aria-activedescendant="
+          activeSuggestion >= 0 ? `search-suggestion-${activeSuggestion}` : undefined
+        "
         @compositionstart="startComposition"
         @compositionend="onCompositionEnd"
+        @keydown="onInputKeydown"
         @keydown.enter="onEnter"
       />
       <button
@@ -147,9 +193,20 @@ onMounted(() => {
     </div>
 
     <section v-if="suggestions.length" class="suggestions scroll-y" aria-label="搜索建议">
-      <ul class="suggestion-list">
-        <li v-for="item in suggestions" :key="item">
-          <button type="button" class="suggestion-item" @click="submit(item)">
+      <ul id="search-suggestion-list" class="suggestion-list" role="listbox">
+        <li
+          v-for="(item, index) in suggestions"
+          :id="`search-suggestion-${index}`"
+          :key="item"
+          role="option"
+          :aria-selected="index === activeSuggestion"
+        >
+          <button
+            type="button"
+            class="suggestion-item"
+            :class="{ 'is-active': index === activeSuggestion }"
+            @click="submit(item)"
+          >
             <Icon :icon="iconSearch" width="16" height="16" class="search-icon" />
             <span class="ellipsis">{{ item }}</span>
           </button>
@@ -157,7 +214,11 @@ onMounted(() => {
       </ul>
     </section>
 
-    <SearchResults v-if="activeKeyword" :key="activeKeyword" :keywords="activeKeyword" />
+    <SearchResults
+      v-if="activeKeyword"
+      :key="`${activeKeyword}#${searchNonce}`"
+      :keywords="activeKeyword"
+    />
 
     <div v-else class="discovery scroll-y">
       <section v-if="history.length" class="section">
@@ -287,7 +348,8 @@ onMounted(() => {
   font-size: var(--font-md);
 }
 
-.suggestion-item:active {
+.suggestion-item:active,
+.suggestion-item.is-active {
   background: var(--fill-subtle);
 }
 

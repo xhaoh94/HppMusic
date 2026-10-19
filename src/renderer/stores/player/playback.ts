@@ -63,6 +63,15 @@ import {
 
 /** Fallback prefetch window when the transition settings are unavailable. */
 const GAPLESS_PREFETCH_WINDOW_SECS = 30;
+/**
+ * 原生后台队列一次最多准备多少首。
+ *
+ * ⚠️ 不能一次把整张歌单全取一遍：每一首都是一次（甚至两次）网络取链，
+ * 60 首歌单就是上百个串行请求，既会拖慢/顶掉当前播放的取链（resolver 的
+ * 音质授权序号是全局的，被后面的请求顶掉就返回空地址），也浪费流量。
+ * 15 首 ≈ 40~60 分钟后台播放，足够覆盖用户真实的后台听歌场景。
+ */
+const BACKGROUND_QUEUE_AHEAD = 15;
 const GAPLESS_SEEK_REGISTRATION_WINDOW_SECS = 2;
 
 type GaplessPreparedSource = {
@@ -958,10 +967,24 @@ export const createPlaybackManager = (
   let backgroundNextPreparing = false;
   let backgroundQueuePreparedRequestSeq = -1;
   let backgroundQueueRetry: { requestSeq: number; after: number } | null = null;
+  /**
+   * 已取过的音源（URL → 解析结果），用于原生切歌回来时补上音质/响度信息。
+   * 上限 120：长时间后台听歌会一直累积，超过就整体丢弃（丢了只是退化成
+   * “以原生 URL 为准”，不影响播放）。
+   */
   const backgroundResolvedSources = new Map<string, ResolvedAudioSource>();
+  const BACKGROUND_SOURCE_CACHE_MAX = 120;
   let backgroundFmRequestSeq = -1;
   let backgroundFmEpoch = -1;
   const backgroundFmTracks = new Set<string>();
+  /** FM 在原生队列里累计准备过的曲目；超过上限丢掉最早的一批，避免长时间后台无界增长。 */
+  const BACKGROUND_FM_TRACKS_MAX = 200;
+  const rememberFmTrack = (trackId: string) => {
+    backgroundFmTracks.add(trackId);
+    if (backgroundFmTracks.size <= BACKGROUND_FM_TRACKS_MAX) return;
+    const oldest = backgroundFmTracks.values().next().value;
+    if (oldest !== undefined) backgroundFmTracks.delete(oldest);
+  };
 
   /** 原生已经在播放：直接接管状态，不能调用 next/playTrack 去重演后台操作。 */
   const adoptNativePlaybackSnapshot = (native: NativePlaybackSnapshot): boolean => {
@@ -1069,6 +1092,9 @@ export const createPlaybackManager = (
     const isFm = getPlaybackSourceQueueId() === PERSONAL_FM_QUEUE_ID;
     if (
       !engine.supportsNativePlaybackQueue() || backgroundNextPreparing ||
+      // 无缝/淡入淡出正在为主线程取下一首地址：此时再并发取链会互相顶掉音质授权序号，
+      // 让那次过渡拿到空地址。等它落定后下一次 timeUpdate 会再触发本函数。
+      gaplessPreparingRegistration !== null ||
       (!isFm && backgroundQueuePreparedRequestSeq === state.playbackRequestSeq) ||
       (backgroundQueueRetry?.requestSeq === state.playbackRequestSeq && Date.now() < backgroundQueueRetry.after) ||
       !state.currentTrackId || getPlaybackIsLoading(state) || state.awaitingTrackLoad
@@ -1090,7 +1116,7 @@ export const createPlaybackManager = (
       if ((isFm && index <= currentIndex) || seen.has(String(track.id)) || !isPlayableSong(track)) return false;
       seen.add(String(track.id));
       return true;
-    });
+    }).slice(0, BACKGROUND_QUEUE_AHEAD);
     if (reuseFmQueue && candidates.length === 0) return;
     backgroundNextPreparing = true;
     try {
@@ -1118,6 +1144,9 @@ export const createPlaybackManager = (
           if (!isCurrent()) return;
           if (!resolved?.url) continue;
           backgroundResolvedSources.set(resolved.url, resolved);
+          if (backgroundResolvedSources.size > BACKGROUND_SOURCE_CACHE_MAX) {
+            backgroundResolvedSources.clear();
+          }
           await engine.setBackgroundNextSource({
             url: resolved.url, trackId: String(track.id),
             title: track.name ?? track.title ?? '', artist: track.artist ?? '',
@@ -1127,7 +1156,7 @@ export const createPlaybackManager = (
             queueIndex: isFm ? backgroundFmTracks.size : queueIndex,
             currentQueueIndex: isFm ? 0 : currentIndex, generation,
           });
-          if (isFm) backgroundFmTracks.add(String(track.id));
+          if (isFm) rememberFmTrack(String(track.id));
           prepared++;
         } catch (error) {
           logger.warn('PlayerPlayback', 'Background source prepare skipped:', {
