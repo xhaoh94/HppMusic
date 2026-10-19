@@ -10,11 +10,6 @@
  */
 import { createRouter, createWebHashHistory } from 'vue-router';
 import type { Router } from 'vue-router';
-import {
-  autoPlayAndOpenOnEnter,
-  claimFirstEntry,
-} from '@mobile/composables/usePlaybackPrefs';
-import { ensureFreeListenPlaying } from '@mobile/adapters/freeListen';
 import { pinia } from '@mobile/store';
 import { useToastStore } from '@/stores/toast';
 
@@ -68,6 +63,25 @@ export const router = createRouter({
       name: 'listen-together',
       component: () => import('@mobile/features/listen-together/ListenTogetherPage.vue'),
       meta: { section: 'main', title: '一起听' },
+    },
+    {
+      path: '/main/liked-playlist',
+      name: 'liked-playlist',
+      component: () => import('@mobile/features/favorites/LikedPlaylistPage.vue'),
+      meta: { section: 'main', title: '我喜欢的歌单' },
+    },
+
+    {
+      path: '/main/personal-fm',
+      name: 'personal-fm',
+      component: () => import('@mobile/features/personal-fm/PersonalFmPage.vue'),
+      meta: { section: 'main', title: '私人 FM' },
+    },
+    {
+      path: '/main/purchased',
+      name: 'purchased',
+      component: () => import('@mobile/features/purchased/PurchasedPage.vue'),
+      meta: { section: 'main', title: '已购音乐' },
     },
 
     // ── 全屏页（不带外壳） ──
@@ -183,23 +197,6 @@ export const router = createRouter({
   ],
 });
 
-/**
- * 自动改道打开播放页时，记下"用户本来要去的那一页"。
- *
- * 守卫里的 `return { name: 'player' }` 在 vue-router 里是 **replace** 语义
- * （源码 `push({ ...to, replace: true })`），那个列表页根本没进历史 ——
- * 播放页返回时没有可退的上一级，只能靠这个记号补一次跳转。
- */
-let autoOpenedPlayerParent: string | null = null;
-
-export const markAutoOpenedPlayerParent = (name: string): void => {
-  autoOpenedPlayerParent = name;
-};
-
-export const clearAutoOpenedPlayerParent = (): void => {
-  autoOpenedPlayerParent = null;
-};
-
 /** 在这几个路由上按返回只该退到后台（音乐继续播） */
 const ROOT_ROUTES = new Set(['home', 'profile', 'loading', 'login', 'not-found']);
 
@@ -235,19 +232,6 @@ let lastHomeSectionPath = '';
 export const getLastHomeSectionPath = (): string => lastHomeSectionPath || '/main/home';
 
 /**
- * 「回主页分区」这一趟不触发"进频道即播"。
- *
- * 进「随便听」的守卫会改道播放页并起播，那是"进入频道"的语义；但从「我的」点
- * 「主页」回到刚才停留的列表只是**回退**，不该把播放页顶上来。一次性标记：
- * 底部栏在导航前打上，守卫消费掉。只对「随便听」这个会自动改道的目标打标记。
- */
-let suppressAutoOpenOnce = false;
-
-export const suppressNextHomeAutoOpen = (): void => {
-  suppressAutoOpenOnce = true;
-};
-
-/**
  * 返回上一级。返回 true = 已处理，原生不要再去问 WebView 历史、也不要退后台。
  *
  * ⚠️ 为什么不让原生用 `canGoBack()`：**vue-router 的 pushState 历史在 WebView 的
@@ -275,15 +259,7 @@ export const goBackOneLevel = (router: Router, routeName?: string | symbol | nul
     return true;
   }
 
-  // ① 自动改道来的播放页：回到用户本来要去的页（它没进历史，只能补跳）
-  if (name === 'player' && autoOpenedPlayerParent) {
-    const parent = autoOpenedPlayerParent;
-    autoOpenedPlayerParent = null;
-    void router.replace({ name: parent });
-    return true;
-  }
-
-  // ② vue-router 记着上一级 → 自己退
+  // ① vue-router 记着上一级 → 自己退
   const back = (window.history.state as { back?: string | null } | null)?.back;
   if (back) {
     window.history.back();
@@ -327,55 +303,9 @@ router.beforeEach(async (to) => {
 });
 
 /**
- * 「进入随便听时自动播 + 进播放页」。
- *
- * ## 为什么放在守卫里，而不是页面里做
- *
- * 原来是在页面的 `onActivated` 里：先渲染列表 → 等 `load()` 回来 → 才播 + 跳。
- * 用户看到的是**列表闪一下再跳走**。放在守卫里就能在进入前直接改道，
- * 列表根本不渲染。
- *
- * ## 三道闸门
- *
- * 1. **开关** —— 用户没开就不该自动跳；
- * 2. **来源不是播放页** —— 从播放页返回时用户要的就是看列表，
- *    不改道才能正常退出去（否则"没在播"依然成立，会被弹回去）；
- * 3. **是不是首次进入** —— 只影响"要不要接着放"，**不影响跳不跳**：
- *    · 队列不存在/为空 → 必须拉歌开播（否则跳过去是个空页面）；
- *    · 队列在、正在播 → 不打扰；
- *    · 队列在、停着 → **首次**进入才接着放。之后切回来不续播，
- *      因为那多半是用户自己按的暂停。
- *
- * 名额在「用户重新打开开关」时归还（见 usePlaybackPrefs）。
- *
- * ⚠️ 注册在**登录守卫之后**：未登录时应该先去登录页，而不是被带去看播放页。
- */
-router.beforeEach((to, from) => {
-  if (to.name !== 'free-listen') return true;
-  if (!autoPlayAndOpenOnEnter.value) return true;
-  // 从「我的」经「主页」回到上次停留的列表：纯回退，不改道播放页
-  if (suppressAutoOpenOnce) {
-    suppressAutoOpenOnce = false;
-    return true;
-  }
-  // 从播放页返回 → 停在列表（这时要的是挑歌）
-  if (from.name === 'player') return true;
-
-  // 不 await：等它回来才放行的话，又变成"（空白）等一会儿再跳"，等于把延迟搬到别处。
-  void ensureFreeListenPlaying(claimFirstEntry());
-
-  // 记下来源：改道是 replace 语义，这一页不进历史，返回时只能靠这个记号回去
-  markAutoOpenedPlayerParent('free-listen');
-
-  // 改道去播放页：**每次**都做
-  return { name: 'player' };
-});
-
-/**
  * 记住主页分区里停留过的页签路径。
  *
- * 用 afterEach：只在导航落地后记，拿到的是最终停留的那一页
- * （被守卫改道去播放页时，落点是播放页，它没有 section，不会覆盖记忆）。
+ * 用 afterEach：只在导航落地后记，拿到的是最终停留的那一页。
  */
 router.afterEach((to) => {
   if (to.meta.section === 'main') lastHomeSectionPath = to.path;

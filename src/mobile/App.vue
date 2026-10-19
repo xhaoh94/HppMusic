@@ -56,7 +56,7 @@ watch(
 /**
  * 走 KeepAlive 的页面名（对应各页 `defineOptions({ name })`）。
  *
- * 这四个是主界面页签页：内容变化很慢（每日推荐 / AI 推荐 / 排行榜都是日更级），
+ * 这些是主界面页签页：内容变化很慢（每日推荐 / AI 推荐 / 排行榜都是日更级），
  * 而用户会在它们与播放页之间反复来回。不缓存的话每次返回都要重新拉一遍
  * ——列表闪一下、滚动位置也没了，明明只是想回去接着看。
  *
@@ -65,7 +65,10 @@ watch(
  * 用 `:include` 而不是在 KeepAlive 里写 `v-if`：后者会打乱组件切换
  * ——实测切页签后**子页签高亮变了、渲染的却还是上一个页**。
  */
-const CACHED_PAGES = ['HomePage', 'FreeListenPage', 'ListenTogetherPage', 'ExplorePage'];
+const CACHED_PAGES = [
+  'HomePage', 'FreeListenPage', 'ListenTogetherPage', 'ExplorePage',
+  'PersonalFmPage', 'PurchasedPage',
+];
 
 // 仅为让路由变化触发重渲染：KeepAlive 自己会处理缓存，这里只需要它在切页时生效
 void route;

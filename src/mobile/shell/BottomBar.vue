@@ -14,7 +14,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import { iconHome, iconMusic, iconProfile } from '@mobile/icons';
 import { useNowPlaying } from '@mobile/adapters/player';
-import { getLastHomeSectionPath, suppressNextHomeAutoOpen } from '@mobile/router';
+import { getLastHomeSectionPath } from '@mobile/router';
 import { useToastStore } from '@/stores/toast';
 
 const route = useRoute();
@@ -38,14 +38,10 @@ const go = (path: string) => {
  * · 已经在主页分区里 → 回这一栏的根页（发现），与主流 App 的页签行为一致；
  * · 从别的分区（我的、详情页…）回来 → 回到**上次停留的子页签**，
  *   否则用户在「随便听」→「我的」→「主页」之后会被莫名丢回「发现」。
- *
- * ⚠️ 回到「随便听」时不触发"进频道即播"：这条路径是回退而不是进入频道，
- * 不该把播放页顶上来（标记见 router 的 suppressNextHomeAutoOpen）。
  */
 const goHomeSection = () => {
   const target = isHomeSection.value ? '/main/home' : getLastHomeSectionPath();
   if (route.path === target) return;
-  if (target === '/main/free-listen') suppressNextHomeAutoOpen();
   void router.push(target);
 };
 

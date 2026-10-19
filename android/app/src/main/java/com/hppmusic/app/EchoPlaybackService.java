@@ -4,8 +4,14 @@ import android.app.Notification;
 import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.ServiceInfo;
+import android.media.AudioFocusRequest;
+import android.media.AudioManager;
+import android.media.AudioPlaybackConfiguration;
 import android.net.Uri;
 import android.os.Binder;
 import android.os.Build;
@@ -31,6 +37,11 @@ import androidx.media3.session.MediaSession;
 import androidx.media3.session.MediaSessionService;
 import androidx.media3.session.MediaStyleNotificationHelper;
 
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArraySet;
@@ -74,6 +85,7 @@ public final class EchoPlaybackService extends MediaSessionService {
     private static final String TAG = "EchoPlayback";
     private static final String CHANNEL_ID = "hppmusic_playback";
     private static final int NOTIFICATION_ID = 1001;
+    private static final String BACKGROUND_NEXT_PREFIX = "hppmusic-background-next:";
     /** 通知按钮的 action；由 onStartCommand 消费 */
     public static final String ACTION_PLAY_PAUSE = "com.hppmusic.app.action.PLAY_PAUSE";
     public static final String ACTION_NEXT = "com.hppmusic.app.action.NEXT";
@@ -165,21 +177,215 @@ public final class EchoPlaybackService extends MediaSessionService {
         return isPlayerReady() && player.isPlaying();
     }
 
+    // ── 音频焦点（自行管理）──
+    //
+    // 规则（用户要求"有其他音源真的在放才暂停"）：
+    // · 永久丢失（AUDIOFOCUS_LOSS）→ 暂停 —— 对方一般是真的在放；
+    // · 瞬时抢焦 / 降音量 → 忽略 —— 抖音启动时的那一下就属于这类，不出声不该打扰；
+    // · 丢焦后重新拿到焦点（GAIN）→ 恢复播放；
+    // · 「与其他音源同时播放」开启时干脆不申请焦点，永不暂停。
+    // 耳机拔出暂停与这里无关，走 ExoPlayer 自己的 BECOMING_NOISY 开关。
+
+    private AudioManager audioManager;
+    private AudioFocusRequest focusRequest;
+    /** 因丢焦暂停的：拿到焦点后据此恢复；用户手动暂停的不恢复 */
+    private boolean focusLossPaused;
+    private int focusLossCheckAttempt;
+    private final Runnable focusLossCheck = new Runnable() {
+        @Override
+        public void run() {
+            if (coPlayWithOthers || !isPlayerPlaying() || focusLossPaused) return;
+            if (hasExternalActivePlayback()) {
+                focusLossPaused = true;
+                player.pause();
+                Log.i(TAG, "检测到其他应用正在输出音频，暂停本机播放");
+                return;
+            }
+            // 焦点事件通常早于对方真正创建 AudioTrack：给真实音频留两次短窗口；
+            // 静音视频没有活跃的音频播放器，不会命中 hasExternalActivePlayback。
+            if (focusLossCheckAttempt++ < 2) {
+                mainHandler.postDelayed(this, focusLossCheckAttempt == 1 ? 350L : 750L);
+            } else {
+                Log.i(TAG, "未检测到其他应用音频输出，忽略本次丢焦");
+            }
+        }
+    };
+    /** 与其他音源同时播放：不申请焦点、不响应丢焦 */
+    private boolean coPlayWithOthers;
+    /**
+     * WebView 退后台后不会可靠执行 Capacitor 的 notifyListeners。
+     * 媒体按键不能直接丢掉，回到前台时由 JS 主动取走并按队列处理。
+     */
+    private boolean appInBackground;
+    /** 当前 Media3 playlist 是否由 renderer 下发的后台队列组成。 */
+    private boolean backgroundPlaylistActive;
+    private int backgroundRepeatMode = -1;
+    private int backgroundExpectedCount = 1;
+    private final Map<String, Integer> backgroundQueueIndices = new HashMap<>();
+    private String backgroundInitialMediaId = "";
+    private String backgroundInitialTrackId = "";
+    private final ArrayDeque<String> pendingMediaControls = new ArrayDeque<>();
+    private androidx.media3.common.AudioAttributes playbackAudioAttributes;
+
+    private androidx.media3.common.AudioAttributes getPlaybackAudioAttributes() {
+        if (playbackAudioAttributes == null) {
+            playbackAudioAttributes = new AudioAttributes.Builder()
+                    .setUsage(C.USAGE_MEDIA)
+                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+                    .build();
+        }
+        return playbackAudioAttributes;
+    }
+
+    private final AudioManager.OnAudioFocusChangeListener focusListener = change -> {
+        // listener 用 mainHandler 绑定（见 applyAudioFocusMode），回调已在主线程
+        switch (change) {
+            case AudioManager.AUDIOFOCUS_LOSS:
+                if (coPlayWithOthers || !isPlayerPlaying()) return;
+                mainHandler.removeCallbacks(focusLossCheck);
+                focusLossCheckAttempt = 0;
+                mainHandler.post(focusLossCheck);
+                break;
+            case AudioManager.AUDIOFOCUS_GAIN:
+                mainHandler.removeCallbacks(focusLossCheck);
+                if (!focusLossPaused || !isPlayerReady()) return;
+                focusLossPaused = false;
+                player.play();
+                break;
+            default:
+                // GAIN_TRANSIENT_MAY_DUCK / LOSS_TRANSIENT 等：一律忽略
+                break;
+        }
+    };
+
+    /** 按当前模式申请/放弃焦点；在播放真正开始时调用，避免空占焦点打扰别的应用。 */
+    private void applyAudioFocusMode() {
+        if (audioManager == null) return;
+        try {
+            if (coPlayWithOthers) {
+                mainHandler.removeCallbacks(focusLossCheck);
+                if (focusRequest != null) {
+                    audioManager.abandonAudioFocusRequest(focusRequest);
+                    focusRequest = null;
+                }
+                focusLossPaused = false;
+                return;
+            }
+            if (focusRequest != null) return; // 已在监听
+            // AudioFocusRequest 要的是平台 AudioAttributes（与 Media3 的是两个类）。
+            // ⚠️ listener 必须绑：requestAudioFocus 对没有 listener 的请求会直接抛
+            // IllegalStateException —— 上一版没绑，异常被吞、焦点事件从此没有回调，
+            // 表现为"别的应用真在放也不暂停"。
+            android.media.AudioAttributes focusAttributes =
+                    new android.media.AudioAttributes.Builder()
+                            .setUsage(android.media.AudioAttributes.USAGE_MEDIA)
+                            .setContentType(android.media.AudioAttributes.CONTENT_TYPE_MUSIC)
+                            .build();
+            focusRequest = new AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+                    .setAudioAttributes(focusAttributes)
+                    .setOnAudioFocusChangeListener(focusListener, mainHandler)
+                    .build();
+            audioManager.requestAudioFocus(focusRequest);
+        } catch (Throwable error) {
+            // 焦点失败绝不能打断播放（它是在 onIsPlayingChanged 里被调用的）
+            Log.w(TAG, "audio focus request failed", error);
+            focusRequest = null;
+        }
+    }
+
+    /**
+     * 音频焦点只说明“有人申请了媒体焦点”，不能说明对方真的有声音。
+     * Android N+ 可以读取活跃的 AudioTrack 播放配置；排除本进程后，只有存在
+     * 已启动的其他媒体播放器才算真正有音源。这样打开没有音轨的静音视频不会暂停音乐。
+     */
+    private boolean hasExternalActivePlayback() {
+        if (audioManager == null) return true;
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.N) return true;
+        try {
+            int activeMediaPlayers = 0;
+            for (AudioPlaybackConfiguration config : audioManager.getActivePlaybackConfigurations()) {
+                android.media.AudioAttributes attributes = config.getAudioAttributes();
+                if (attributes == null) continue;
+                int usage = attributes.getUsage();
+                if (usage == android.media.AudioAttributes.USAGE_MEDIA
+                        || usage == android.media.AudioAttributes.USAGE_GAME
+                        || usage == android.media.AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY) {
+                    activeMediaPlayers++;
+                }
+            }
+            // 当前播放器本身也会出现在列表中；多于一个才说明有其他应用的
+            // 活跃媒体播放器。没有音轨的静音视频不会新增 AudioPlaybackConfiguration。
+            return activeMediaPlayers > 1;
+        } catch (Throwable error) {
+            // 读取失败时保守暂停，不能让真正的来电/音乐与本机叠音。
+            Log.w(TAG, "读取其他应用音频输出状态失败", error);
+            return true;
+        }
+    }
+
+    private void abandonAudioFocus() {
+        mainHandler.removeCallbacks(focusLossCheck);
+        if (audioManager != null && focusRequest != null) {
+            audioManager.abandonAudioFocusRequest(focusRequest);
+        }
+        focusRequest = null;
+        focusLossPaused = false;
+    }
+
+    private final BroadcastReceiver becomingNoisyReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (!AudioManager.ACTION_AUDIO_BECOMING_NOISY.equals(intent.getAction())) return;
+            mainHandler.post(() -> {
+                if (isPlayerPlaying()) player.pause();
+            });
+        }
+    };
+
+    /** 「与其他音源同时播放」开关（设置页 → 播放）。 */
+    public CompletableFuture<Void> setCoPlayWithOthers(boolean enabled) {
+        return command(() -> {
+            coPlayWithOthers = enabled;
+            applyAudioFocusMode();
+        });
+    }
+
+    /** 由 Capacitor 插件同步 Activity 是否在后台。 */
+    public void setAppInBackground(boolean background) {
+        appInBackground = background;
+    }
+
+    /** 取出后台期间积累的媒体按键，并一次性清空，避免恢复后重复切歌。 */
+    public CompletableFuture<List<String>> drainPendingMediaControls() {
+        CompletableFuture<List<String>> future = new CompletableFuture<>();
+        runOnMain(() -> {
+            List<String> controls = new ArrayList<>(pendingMediaControls);
+            pendingMediaControls.clear();
+            future.complete(controls);
+        });
+        return future;
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
         instance = this;
 
-        AudioAttributes audioAttributes = new AudioAttributes.Builder()
-                .setUsage(C.USAGE_MEDIA)
-                .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                .build();
+        audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
+        // 耳机拔出（BECOMING_NOISY）暂停与音频焦点是两回事：前者必须保留，
+        // 且 ExoPlayer 的这个开关不依赖焦点处理，关掉焦点自己管不受影响。
+        registerReceiver(becomingNoisyReceiver,
+                new IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY));
+
+        AudioAttributes audioAttributes = getPlaybackAudioAttributes();
 
         dspProcessor = new EchoDspAudioProcessor();
         EchoDspRenderersFactory renderersFactory = new EchoDspRenderersFactory(this, dspProcessor);
         player = new ExoPlayer.Builder(this, renderersFactory).build();
-        // 第二个参数让 Media3 自动申请/释放音频焦点。
-        player.setAudioAttributes(audioAttributes, true);
+        // 焦点改为自行管理（false = 不让 Media3 自动申请）：Media3 把任何焦点丢失
+        // 都当暂停信号 —— 抖音这类 App 启动时抢一下瞬时焦点（并没有真的出声），
+        // 音乐就被暂停了。自行管理的规则见 focusListener。
+        player.setAudioAttributes(audioAttributes, false);
         // Media3 在 AUDIO_BECOMING_NOISY（通常是耳机拔出）时暂停。
         player.setHandleAudioBecomingNoisy(true);
         player.addListener(new Player.Listener() {
@@ -187,6 +393,8 @@ public final class EchoPlaybackService extends MediaSessionService {
             public void onPlaybackStateChanged(int playbackState) {
                 if (playbackState == Player.STATE_READY) {
                     completePendingLoadIfReady();
+                    // 队列项切换不经过 load()，transition 时 duration 可能仍是 TIME_UNSET。
+                    if (backgroundPlaylistActive) emitDurationChange();
                 } else if (playbackState == Player.STATE_ENDED) {
                     emitPlaybackEnd("eof");
                     emitState();
@@ -199,6 +407,22 @@ public final class EchoPlaybackService extends MediaSessionService {
                 // 播放状态变了就刷通知（否则按钮图标会停在旧状态）
                 updatePlaybackNotification();
                 emitState();
+                // 真正开始出声才申请焦点：空占焦点会把别的正在放的应用挤下去
+                if (isPlaying && !coPlayWithOthers) applyAudioFocusMode();
+            }
+
+            @Override
+            public void onMediaItemTransition(@Nullable MediaItem mediaItem, int reason) {
+                if (backgroundPlaylistActive && mediaItem != null
+                        && reason != Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) {
+                    // 这是已经完成的切换，不是 NextSong 请求。前后台都只通知 JS
+                    // 读取快照，禁止再调用 next/load，否则会把正在播的歌曲重开。
+                    sourceSeq++;
+                    emitMediaControl("NativeTrackTransition");
+                    emitDurationChange();
+                    emitState();
+                    updatePlaybackNotification();
+                }
             }
 
             @Override
@@ -238,10 +462,9 @@ public final class EchoPlaybackService extends MediaSessionService {
                      * `Couldn't find a unique registered media button receiver`
                      * 会一直存在、按键静默失效），再送到这里。
                      *
-                     * Media3 默认会把按键翻译成 player 的命令，而本项目的 player 里
-                     * 始终只有一个 MediaItem（队列/随机/单循环/失败跳过都在渲染层），
-                     * 原生 seek 下一首无从下手 —— 所以按本类既有的约定转成
-                     * onMediaControl 事件交回渲染层，类型名与内核的
+                     * Media3 默认会把按键翻译成 player 的命令。后台队列已经由 renderer
+                     * 下发到原生时，直接在 Media3 playlist 内切换；没有原生下一项时，
+                     * 才转成媒体控制事件交回渲染层，类型名与内核的
                      * setMediaSessionHandlers 逐字对齐。
                      */
                     @SuppressWarnings("deprecation")
@@ -260,9 +483,11 @@ public final class EchoPlaybackService extends MediaSessionService {
                         String type;
                         switch (event.getKeyCode()) {
                             case KeyEvent.KEYCODE_MEDIA_NEXT:
+                                if (skipNativeQueueTrack(1)) return true;
                                 type = "NextSong";
                                 break;
                             case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
+                                if (skipNativeQueueTrack(-1)) return true;
                                 type = "PreviousSong";
                                 break;
                             case KeyEvent.KEYCODE_MEDIA_PLAY:
@@ -418,11 +643,12 @@ public final class EchoPlaybackService extends MediaSessionService {
                     if (player.isPlaying()) player.pause(); else player.play();
                     break;
                 case ACTION_NEXT:
-                    // 顺序/随机等模式由渲染层决定，这里只上报"用户点了下一首"
-                    emitMediaControl("NextSong");
+                    // 有原生预置项时直接切，后台不依赖 WebView；没有预置项时暂存
+                    // NextSong，回到前台后由渲染层按真实队列/随机模式处理。
+                    if (!skipNativeQueueTrack(1)) emitMediaControl("NextSong");
                     break;
                 case ACTION_PREVIOUS:
-                    emitMediaControl("PreviousSong");
+                    if (!skipNativeQueueTrack(-1)) emitMediaControl("PreviousSong");
                     break;
                 case ACTION_STOP:
                     player.stop();
@@ -446,12 +672,18 @@ public final class EchoPlaybackService extends MediaSessionService {
      * 写成 lowercase（如 `nexttrack`，那是 Android `MediaSession` 自己的叫法）
      * 会静静地不匹配，表现为：通知上的按钮点下去没任何反应且不报错。
      *
-     * ⚠️ 为什么"下一首/上一首"不直接在这里调 player：
-     * 曲目顺序由渲染层的队列决定（随机/单循环/失败跳过、私人 FM、一起听……）。
-     * 原生侧只知道播放器里当前那一个 MediaItem，直接 seek 下一首
-     * 会绕开队列与播放模式，与界面显示的顺序不一致。
+     * 当原生后台队列存在时，按钮直接操作 Media3 playlist；否则才交给渲染层，
+     * 由 renderer 处理随机、单循环、失败跳过、私人 FM 等动态队列。
      */
     private void emitMediaControl(String type) {
+        if (appInBackground) {
+            // 这里不能只依赖 notifyListeners：后台 WebView 可能完全不调 JS，
+            // 但通知栏按钮本身已经被 Android 消费掉了。
+            if (pendingMediaControls.size() >= 16) pendingMediaControls.removeFirst();
+            pendingMediaControls.addLast(type);
+            Log.i(TAG, "后台媒体按键已暂存: " + type);
+            return;
+        }
         for (Listener listener : listeners) {
             listener.onMediaControl(type, null, null);
         }
@@ -495,6 +727,8 @@ public final class EchoPlaybackService extends MediaSessionService {
         runOnMain(() -> {
             generation++;
             requestSeq++;
+            backgroundPlaylistActive = false;
+            backgroundExpectedCount = 1;
             cancelPendingLoad("Audio source load was superseded");
             if (player != null) {
                 player.stop();
@@ -579,6 +813,7 @@ public final class EchoPlaybackService extends MediaSessionService {
         return command(() -> {
             player.stop();
             player.clearMediaItems();
+            backgroundPlaylistActive = false;
             stopPlaybackForeground();
             emitState();
         });
@@ -608,11 +843,154 @@ public final class EchoPlaybackService extends MediaSessionService {
     }
 
     public CompletableFuture<Void> setLoopFile(boolean loop) {
-        return command(() -> player.setRepeatMode(loop ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_OFF));
+        return command(() -> {
+            // 内核每次 load 后都会 setLoopFile(false)。原生队列接管模式后，
+            // 这个旧单文件开关不能再覆盖用户选择的循环/随机。
+            if (backgroundRepeatMode >= 0) applyBackgroundPlaybackMode();
+            else player.setRepeatMode(loop ? Player.REPEAT_MODE_ONE : Player.REPEAT_MODE_OFF);
+        });
     }
 
     public CompletableFuture<Void> setPauseOnDeviceDisconnect(boolean enabled) {
         return command(() -> player.setHandleAudioBecomingNoisy(enabled));
+    }
+
+    /**
+     * 在 WebView 即将退后台时预置一首已经解析好的下一首。
+     *
+     * Android 的前台服务和 ExoPlayer 可以继续跑，但后台 WebView 不一定还能执行
+     * resolver/定时器。把下一首放进原生 playlist 后，EOF 和通知栏 Next 都能在
+     * JS 不运行时直接切换；恢复前台后再由 NextSong 事件补齐 JS 队列状态。
+     */
+    public CompletableFuture<Void> setBackgroundNextSource(
+            String url, String trackId, String title, String artist, String album,
+            String coverUrl, long durationMs, boolean append, String currentTrackId,
+            int queueIndex, int currentQueueIndex, int expectedGeneration) {
+        return command(() -> {
+            if (expectedGeneration >= 0 && expectedGeneration != generation) return;
+            if (url == null || url.trim().isEmpty()) {
+                throw new IllegalArgumentException("后台下一首音频地址为空");
+            }
+            if (player.getCurrentMediaItem() == null) return;
+            if (!append) {
+                // 初始曲目 mediaId 是 hppmusic-序号，也要能恢复它的业务 ID；
+                // 列表循环回到第一项、或按上一首返回时不能靠 next() 猜。
+                backgroundInitialMediaId = player.getCurrentMediaItem().mediaId;
+                backgroundInitialTrackId = currentTrackId == null ? "" : currentTrackId;
+                backgroundQueueIndices.put(backgroundInitialMediaId, currentQueueIndex);
+            }
+            int currentIndex = player.getCurrentMediaItemIndex();
+            int itemCount = player.getMediaItemCount();
+            if (currentIndex < 0) return;
+            if (!append && itemCount > currentIndex + 1) {
+                player.removeMediaItems(currentIndex + 1, itemCount);
+            }
+            MediaMetadata.Builder metadata = new MediaMetadata.Builder();
+            if (title != null) metadata.setTitle(title);
+            if (artist != null) metadata.setArtist(artist);
+            if (album != null) metadata.setAlbumTitle(album);
+            if (coverUrl != null && !coverUrl.isEmpty()) {
+                metadata.setArtworkUri(Uri.parse(coverUrl));
+            }
+            MediaItem item = new MediaItem.Builder()
+                    .setMediaId(BACKGROUND_NEXT_PREFIX + String.valueOf(trackId))
+                    .setUri(Uri.parse(url))
+                    .setMediaMetadata(metadata.build())
+                    .build();
+            // 插入而非按取链完成顺序追加：从列表中间开始时，顺序播放不能
+            // 把前半张歌单放到末尾；随机则交给 ExoPlayer 的 shuffleOrder。
+            for (int i = 0; i < player.getMediaItemCount(); i++) {
+                if (player.getMediaItemAt(i).mediaId.equals(item.mediaId)) return;
+            }
+            int insertAt = player.getMediaItemCount();
+            if (queueIndex >= 0) {
+                for (int i = 0; i < player.getMediaItemCount(); i++) {
+                    Integer index = backgroundQueueIndices.get(player.getMediaItemAt(i).mediaId);
+                    if (index != null && index > queueIndex) { insertAt = i; break; }
+                }
+            }
+            backgroundQueueIndices.put(item.mediaId, queueIndex);
+            player.addMediaItem(insertAt, item);
+            backgroundPlaylistActive = true;
+            applyBackgroundPlaybackMode();
+            // 当前曲目仍在播放时不主动 prepare，ExoPlayer 会在当前项结束前加载下一项。
+            updatePlaybackNotification();
+        });
+    }
+
+    /** 清掉当前曲目之后的原生后台队列，不停止当前播放。 */
+    public CompletableFuture<Void> clearBackgroundQueue(int expectedItemCount) {
+        return command(() -> {
+            backgroundExpectedCount = Math.max(1, expectedItemCount);
+            if (player.getCurrentMediaItem() != null) {
+                int currentIndex = player.getCurrentMediaItemIndex();
+                int itemCount = player.getMediaItemCount();
+                if (currentIndex >= 0 && itemCount > currentIndex + 1) {
+                    player.removeMediaItems(currentIndex + 1, itemCount);
+                }
+                if (currentIndex > 0) player.removeMediaItems(0, currentIndex);
+            }
+            backgroundPlaylistActive = false;
+            backgroundQueueIndices.clear();
+            applyBackgroundPlaybackMode();
+        });
+    }
+
+    /** 本轮取链结束后，把失败歌曲视为不可用项；取链中不能提前把空缺当边界。 */
+    public CompletableFuture<Void> finishBackgroundQueue(int expectedGeneration, String currentTrackId) {
+        return command(() -> {
+            if (expectedGeneration >= 0 && expectedGeneration != generation) return;
+            if (player.getCurrentMediaItem() == null) return;
+            if (!backgroundPlaylistActive) {
+                backgroundInitialMediaId = player.getCurrentMediaItem().mediaId;
+                backgroundInitialTrackId = currentTrackId;
+            }
+            backgroundExpectedCount = player.getMediaItemCount();
+            backgroundPlaylistActive = true;
+            applyBackgroundPlaybackMode();
+        });
+    }
+
+    /** 0=顺序，1=单曲循环，2=列表循环，3=随机。模式变化不清队列、不重开音源。 */
+    public CompletableFuture<Void> setBackgroundRepeatMode(int mode) {
+        return command(() -> {
+            if (mode < 0 || mode > 3) throw new IllegalArgumentException("播放模式无效");
+            backgroundRepeatMode = mode;
+            applyBackgroundPlaybackMode();
+        });
+    }
+
+    private void applyBackgroundPlaybackMode() {
+        player.setShuffleModeEnabled(backgroundRepeatMode == 3);
+        boolean canRepeatList = backgroundExpectedCount == 1 || player.getMediaItemCount() > 1;
+        player.setRepeatMode(backgroundRepeatMode == 1 ? Player.REPEAT_MODE_ONE
+                : backgroundRepeatMode >= 2 && canRepeatList ? Player.REPEAT_MODE_ALL : Player.REPEAT_MODE_OFF);
+    }
+
+    private boolean skipNativeQueueTrack(int direction) {
+        if (!backgroundPlaylistActive || player.getMediaItemCount() == 0) return false;
+        // 暂时只有 [A,D] 时不能把 D 的上一首当成 A；列表还在取链时交回逻辑队列。
+        if (player.getMediaItemCount() < backgroundExpectedCount) return false;
+        int nextIndex = direction > 0 ? player.getNextMediaItemIndex() : player.getPreviousMediaItemIndex();
+        // 单曲循环只约束自然结束，用户明确上下首仍然走列表并允许首尾切换。
+        if (nextIndex == C.INDEX_UNSET && backgroundRepeatMode == 1) {
+            nextIndex = direction > 0 ? 0 : player.getMediaItemCount() - 1;
+        }
+        if (nextIndex != C.INDEX_UNSET) {
+            player.seekTo(nextIndex, 0);
+            player.play();
+        }
+        // 顺序模式边界已由原生处理，不能又转给 JS 从第一首重新开始。
+        return true;
+    }
+
+    public CompletableFuture<Boolean> skipQueueTrack(int direction) {
+        CompletableFuture<Boolean> future = new CompletableFuture<>();
+        runOnMain(() -> {
+            try { future.complete(isPlayerReady() && skipNativeQueueTrack(direction)); }
+            catch (Throwable error) { future.completeExceptionally(error); }
+        });
+        return future;
     }
 
     public CompletableFuture<Bundle> getState() {
@@ -634,6 +1012,7 @@ public final class EchoPlaybackService extends MediaSessionService {
                 state.putDouble("volume", 0);
                 state.putDouble("speed", 1);
                 state.putInt("trackSeq", sourceSeq);
+                state.putString("mediaId", "");
                 state.putInt("generation", generation);
                 state.putLong("sampledAt", System.currentTimeMillis());
                 future.complete(state);
@@ -642,11 +1021,31 @@ public final class EchoPlaybackService extends MediaSessionService {
             try {
                 state.putBoolean("playing", player.isPlaying());
                 state.putBoolean("paused", !player.isPlaying());
+                state.putBoolean("ended", player.getPlaybackState() == Player.STATE_ENDED);
                 state.putDouble("duration", seconds(player.getDuration()));
                 state.putDouble("timePos", seconds(player.getCurrentPosition()));
                 state.putDouble("volume", player.getVolume() * 100.0);
                 state.putDouble("speed", player.getPlaybackParameters().speed);
                 state.putInt("trackSeq", sourceSeq);
+                MediaItem current = player.getCurrentMediaItem();
+                state.putString("mediaId", current == null ? "" : current.mediaId);
+                String trackId = "";
+                if (current != null) {
+                    if (current.mediaId.startsWith(BACKGROUND_NEXT_PREFIX)) {
+                        trackId = current.mediaId.substring(BACKGROUND_NEXT_PREFIX.length());
+                    } else if (backgroundPlaylistActive && current.mediaId.equals(backgroundInitialMediaId)) {
+                        trackId = backgroundInitialTrackId;
+                    }
+                }
+                state.putString("trackId", trackId);
+                state.putString("path", current == null || current.localConfiguration == null
+                        ? "" : current.localConfiguration.uri.toString());
+                state.putInt("repeatMode", player.getRepeatMode());
+                state.putBoolean("shuffleModeEnabled", player.getShuffleModeEnabled());
+                state.putInt("queueSize", player.getMediaItemCount());
+                state.putInt("queueIndex", player.getCurrentMediaItemIndex());
+                state.putBoolean("backgroundQueueActive", backgroundPlaylistActive);
+                state.putBoolean("playWhenReady", player.getPlayWhenReady());
                 state.putInt("generation", generation);
                 state.putLong("sampledAt", System.currentTimeMillis());
                 future.complete(state);
@@ -869,6 +1268,8 @@ public final class EchoPlaybackService extends MediaSessionService {
         stopPlaybackForeground();
         mainHandler.removeCallbacks(positionTicker);
         cancelPendingLoad("Playback service destroyed");
+        unregisterReceiver(becomingNoisyReceiver);
+        abandonAudioFocus();
         if (mediaSession != null) {
             mediaSession.release();
             mediaSession = null;

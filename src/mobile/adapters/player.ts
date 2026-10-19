@@ -22,6 +22,8 @@ import { useSettingStore } from '@/stores/setting';
 import { isLyricLineFiltered, resolveVisibleLyricIndex } from '@/utils/lyricFilter';
 import { usePlaylistStore, MANUAL_PLAYBACK_QUEUE_ID } from '@/stores/playlist';
 import { DEFAULT_PLAYER_VOLUME } from '@shared/playback';
+import { createNativePlayerBridge } from '@bridge/nativePlayer';
+import { coPlayWithOthers } from '@mobile/composables/usePlaybackPrefs';
 import { useHistoryStore } from '@/stores/historyStore';
 import { waitForSqlitePersistHydration } from '@/stores/sqlitePersist';
 import { replaceQueueAndPlay } from '@/utils/playback';
@@ -71,6 +73,46 @@ export const bootstrapPlayer = (): Promise<void> => {
 
     await playerStore.init();
     logger.info('MobilePlayer', 'Player kernel ready');
+
+    // 「与其他音源同时播放」：启动时下发一次，之后设置里改动实时同步。
+    // 原生侧音频焦点是服务自管的（Media3 自动接管已关），这条就是它的总开关。
+    const nativeBridge = createNativePlayerBridge();
+    const applyCoPlay = (enabled: boolean) => {
+      nativeBridge.player.setCoPlayWithOthers(enabled).catch((error: unknown) => {
+        logger.warn('MobilePlayer', 'setCoPlayWithOthers failed', error);
+      });
+    };
+    applyCoPlay(coPlayWithOthers.value);
+    watch(coPlayWithOthers, applyCoPlay);
+
+    // ── 后台自动切歌兜底 ──
+    // WebView 退到后台约 5 分钟后，Chromium 会把定时器强化节流（最低 1 次/分钟），
+    // 内核"播完切下一首"的链路在长时间后台后可能收不到结束事件或执行中断。
+    // 兜底：收到 eof 后 6 秒检查一次，若播放器仍停在原曲结尾（没切走）就由适配层
+    // 直接调 next()。定时器被节流时这条最迟 1 分钟内触发，而不是永远卡住不切。
+    const endWatchdog: { timer: number | null } = { timer: null };
+    nativeBridge.player.onPlaybackEnd((reason) => {
+      if (reason !== 'eof') return;
+      if (endWatchdog.timer !== null) window.clearTimeout(endWatchdog.timer);
+      endWatchdog.timer = window.setTimeout(() => {
+        endWatchdog.timer = null;
+        void (async () => {
+          try {
+            const state = await nativeBridge.player.getState();
+            const atEnd =
+              state.ended === true ||
+              (!state.playing &&
+                state.duration > 0 &&
+                state.timePos >= state.duration - 0.25);
+            if (!atEnd || playerStore.isLoading || playerStore.playbackEnded) return;
+            logger.warn('MobilePlayer', '后台切歌兜底：结束事件未生效，直接切下一首');
+            usePlaybackActions().next();
+          } catch (error) {
+            logger.warn('MobilePlayer', '后台切歌兜底执行失败', error);
+          }
+        })();
+      }, 6000);
+    });
 
     /**
      * 把出厂默认音量从 50 抬到 100。

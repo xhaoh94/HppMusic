@@ -223,6 +223,7 @@ export class MobileAudioPlayer {
   async getState(): Promise<{
     playing: boolean;
     paused: boolean;
+    ended?: boolean;
     duration: number;
     timePos: number;
     trackSeq: number;
@@ -233,6 +234,7 @@ export class MobileAudioPlayer {
     return {
       playing: !this.audio.paused,
       paused: this.audio.paused,
+      ended: this.audio.ended,
       duration: this.duration,
       timePos: this.audio.currentTime,
       trackSeq: this.sourceSeq,

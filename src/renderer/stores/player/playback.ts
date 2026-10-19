@@ -1,5 +1,7 @@
 import logger from '@/utils/logger';
 import type { Song } from '@/models/song';
+import { nativeSnapshotTrackId, type NativePlaybackSnapshot } from '../../../shared/nativePlaybackSnapshot';
+import { nativeQueueMode, nativeQueueCandidateIndices } from '../../../shared/nativeQueueMode';
 import {
   buildNextTrackDecisionKey,
   findPlaybackSourceQueue,
@@ -953,6 +955,208 @@ export const createPlaybackManager = (
     return true;
   };
 
+  let backgroundNextPreparing = false;
+  let backgroundQueuePreparedRequestSeq = -1;
+  let backgroundQueueRetry: { requestSeq: number; after: number } | null = null;
+  const backgroundResolvedSources = new Map<string, ResolvedAudioSource>();
+  let backgroundFmRequestSeq = -1;
+  let backgroundFmEpoch = -1;
+  const backgroundFmTracks = new Set<string>();
+
+  /** 原生已经在播放：直接接管状态，不能调用 next/playTrack 去重演后台操作。 */
+  const adoptNativePlaybackSnapshot = (native: NativePlaybackSnapshot): boolean => {
+    const trackId = nativeSnapshotTrackId(native);
+    if (!trackId || !native.path || state.awaitingTrackLoad) return false;
+    const isFm = getPlaybackSourceQueueId() === PERSONAL_FM_QUEUE_ID;
+    let list = getCurrentSourceQueue()?.songs ?? state.currentPlaylist ?? [];
+    const track = list.find((song) => String(song.id) === trackId)
+      ?? (isFm ? playlistStore.personalFmBuffer.find((song) => String(song.id) === trackId) : null)
+      ?? (String(state.currentTrackSnapshot?.id) === trackId ? state.currentTrackSnapshot : null);
+    if (!track) return false;
+    const changed = trackId !== String(state.currentTrackId ?? '');
+    if (changed) {
+      if (isFm) {
+        reportFmAdvance();
+        // WebView 冻结期间可能从 A 连续走到 C。把已下发且位于 C 前面的
+        // buffer 候选一并移到队列历史，不能恢复后又把 B 当成“下一首”。
+        // 仅同步队列，不为无法确认听完的中间项伪造听歌时长或播放统计。
+        const pendingIndex = playlistStore.personalFmBuffer.findIndex((song) => String(song.id) === trackId);
+        const passed = pendingIndex > 0 ? playlistStore.personalFmBuffer.slice(0, pendingIndex)
+          .filter((song) => backgroundFmTracks.has(String(song.id))) : [];
+        for (const item of [...passed, track]) {
+          const candidate = playlistStore.peekNextPersonalFmCandidate(
+            state.currentTrackId, `native:${native.generation}:${native.trackSeq}:${item.id}`, item,
+          );
+          if (!candidate) continue;
+          const committed = playlistStore.commitPersonalFmCandidate(candidate);
+          if (!committed) return false;
+          list = committed;
+          committedFmOccurrence = candidate.occurrence;
+        }
+      }
+      onGaplessTrackEnded?.();
+      clearAutoNextTimer();
+      historyManager.resetHistoryUploadState(track);
+      state.currentTrackId = trackId;
+      state.currentTrackSnapshot = toRawSong(track);
+      state.currentPlaylist = list;
+      state.currentAudioQualityOverride = null;
+      state.currentCatalogSourceOverrideTrackId = null;
+      state.currentCloudSourceOverrideTrackId = null;
+      state.climaxMarks = [];
+      state.lastError = null;
+      state.stallRecovering = false;
+      state.recentSeekIgnoreEnd = false;
+      state.seekTargetTime = null;
+      state.nativeSeekActive = false;
+      state.nativeSeekGeneration = null;
+      state.supersededNativeTrackSeq = null;
+      state.autoNextAttempts = 0;
+      state.autoNextSourceTrackId = trackId;
+      playlistStore.updateQueueCurrentTrack(trackId, state.currentSourceQueueId ?? undefined);
+      consumePlayedQueuedNextTrack(playlistStore, trackId, state.currentSourceQueueId);
+      // 随机模式按实际落点记账，不通过随机 next() 推测后台走过哪些歌曲。
+      const index = list.findIndex((song) => String(song.id) === trackId);
+      if (!isFm && state.playMode === 'random') {
+        state.shufflePlayed.add(index);
+        state.shuffleQueue = state.shuffleQueue?.filter((value) => value !== index) ?? null;
+      }
+      const resolved = backgroundResolvedSources.get(native.path);
+      applyResolvedAudioSource(track, resolved ?? {
+        url: native.path, quality: null, effect: 'none', loudness: null,
+      });
+      const lyricHash = String(track.hash || track.id);
+      if (track.lyric) lyricStore.setLyric(track.lyric, lyricHash);
+      else lyricStore.clear(lyricHash, '歌词加载中...');
+      void lyricStore.fetchLyrics(lyricHash, {
+        preserveCurrent: Boolean(track.lyric), duration: native.duration * 1000, track,
+      });
+      state.historyLocalRecorded = true;
+      void useHistoryStore().recordPlay(toRawSong(track));
+    }
+    // URL、时长和位置始终以原生为准（包括循环回到初始项、暂停、同曲多次恢复）。
+    state.currentAudioUrl = native.path;
+    state.currentPlaybackSource = { url: native.path };
+    state.nativeTrackSeq = native.trackSeq ?? state.nativeTrackSeq;
+    state.currentTime = Math.max(0, native.timePos);
+    state.currentTimeUpdatedAt = native.sampledAt ?? Date.now();
+    state.duration = native.duration > 0 ? native.duration : Math.max(0, track.duration || 0);
+    state.playbackEnded = native.ended === true;
+    const shouldPlay = !native.ended && (native.playWhenReady ?? native.playing);
+    beginPlaybackIntent(state, {
+      seq: state.playbackRequestSeq, trackId,
+      sourceQueueId: state.currentSourceQueueId, shouldPlay: Boolean(shouldPlay),
+    });
+    completePlaybackIntent(state, state.playbackRequestSeq, { isPlaying: Boolean(shouldPlay) });
+    setEnginePlaybackStatus(state, native.playing ? 'playing' : native.ended ? 'stopped' : 'paused', trackId);
+    engine.adoptNativePlaybackSnapshot(native.path, native.timePos, state.duration, native.sampledAt);
+    // 保留原生队列，不要因恢复后 timeUpdate 再触发清队列/取链。
+    backgroundQueuePreparedRequestSeq = state.playbackRequestSeq;
+    if (isFm && changed) {
+      // 原生播放到 buffer 里的曲目时才提交FM消费；补推荐不重开当前音源。
+      void playlistStore.replenishPersonalFmBuffer().then(() => prepareBackgroundNext())
+        .catch((error) => logger.warn('PlayerPlayback', 'FM native buffer refill failed', error));
+    }
+    return true;
+  };
+
+  /**
+   * 原生队列始终使用完整列表的索引，不再为单曲/随机各准备一份不同的尾队列。
+   * 切模式只改 Media3 repeat/shuffle，不清队列、不重播、不重复取链。
+   * 音源串行解析；用 Set 线性去重，优先准备下一首，再补当前位置之前的曲目。
+   */
+  const prepareBackgroundNext = async (): Promise<void> => {
+    const isFm = getPlaybackSourceQueueId() === PERSONAL_FM_QUEUE_ID;
+    if (
+      !engine.supportsNativePlaybackQueue() || backgroundNextPreparing ||
+      (!isFm && backgroundQueuePreparedRequestSeq === state.playbackRequestSeq) ||
+      (backgroundQueueRetry?.requestSeq === state.playbackRequestSeq && Date.now() < backgroundQueueRetry.after) ||
+      !state.currentTrackId || getPlaybackIsLoading(state) || state.awaitingTrackLoad
+    ) return;
+
+    const sourceQueueId = getPlaybackSourceQueueId();
+    const history = getCurrentSourceQueue()?.songs ?? state.currentPlaylist ?? [];
+    const list = isFm ? [...history, ...playlistStore.personalFmBuffer] : history;
+    const currentIndex = list.findIndex((song) => String(song.id) === String(state.currentTrackId));
+    if (currentIndex < 0) return;
+    const requestSeq = state.playbackRequestSeq;
+    const currentTrackId = String(state.currentTrackId);
+    const fmEpoch = playlistStore.personalFmSessionEpoch;
+    const isCurrent = () => requestSeq === state.playbackRequestSeq && (!isFm || fmEpoch === playlistStore.personalFmSessionEpoch);
+    const reuseFmQueue = isFm && backgroundFmRequestSeq === requestSeq && backgroundFmEpoch === fmEpoch;
+    const seen = new Set(reuseFmQueue ? [...backgroundFmTracks, currentTrackId] : [currentTrackId]);
+    const candidates = nativeQueueCandidateIndices(list.length, currentIndex).filter((index) => {
+      const track = list[index]!;
+      if ((isFm && index <= currentIndex) || seen.has(String(track.id)) || !isPlayableSong(track)) return false;
+      seen.add(String(track.id));
+      return true;
+    });
+    if (reuseFmQueue && candidates.length === 0) return;
+    backgroundNextPreparing = true;
+    try {
+      const generation = await engine.getNativeQueueGeneration();
+      if (!isCurrent()) return;
+      if (!reuseFmQueue) {
+        await engine.clearBackgroundQueue(candidates.length + 1);
+        if (!isCurrent()) return;
+        backgroundResolvedSources.clear();
+        backgroundFmTracks.clear();
+        if (isFm) {
+          backgroundFmRequestSeq = requestSeq;
+          backgroundFmEpoch = fmEpoch;
+          backgroundFmTracks.add(currentTrackId);
+        }
+      }
+      // FM始终向前消费新推荐；不能循环已听历史，也不能随机打乱FM服务的顺序。
+      await engine.setBackgroundRepeatMode(isFm ? 0 : nativeQueueMode(state.playMode));
+      let prepared = 0;
+      for (const queueIndex of candidates) {
+        if (!isCurrent()) return;
+        const track = list[queueIndex]!;
+        try {
+          const resolved = await resolver.resolveAudioUrl(track);
+          if (!isCurrent()) return;
+          if (!resolved?.url) continue;
+          backgroundResolvedSources.set(resolved.url, resolved);
+          await engine.setBackgroundNextSource({
+            url: resolved.url, trackId: String(track.id),
+            title: track.name ?? track.title ?? '', artist: track.artist ?? '',
+            album: track.album ?? '', coverUrl: track.coverUrl ?? track.cover ?? '',
+            durationMs: Math.max(0, Number(track.duration ?? 0) * 1000),
+            append: reuseFmQueue || prepared > 0, currentTrackId,
+            queueIndex: isFm ? backgroundFmTracks.size : queueIndex,
+            currentQueueIndex: isFm ? 0 : currentIndex, generation,
+          });
+          if (isFm) backgroundFmTracks.add(String(track.id));
+          prepared++;
+        } catch (error) {
+          logger.warn('PlayerPlayback', 'Background source prepare skipped:', {
+            trackId: track.id, error: String(error),
+          });
+        }
+      }
+      if (isCurrent()) {
+        if (prepared > 0 || candidates.length === 0) {
+          await engine.finishNativeQueuePreparation(generation, currentTrackId);
+          if (!isCurrent()) return;
+          backgroundQueuePreparedRequestSeq = requestSeq;
+          backgroundQueueRetry = null;
+        } else {
+          // 临时网络失败不能永远标为准备完成；也不能每250ms重试整张歌单。
+          backgroundQueueRetry = { requestSeq, after: Date.now() + 30_000 };
+        }
+      }
+      logger.info('PlayerPlayback', 'Background native queue prepared', {
+        currentTrackId, sourceQueueId, prepared,
+      });
+    } catch (error) {
+      if (isCurrent()) backgroundQueueRetry = { requestSeq, after: Date.now() + 30_000 };
+      logger.warn('PlayerPlayback', 'Background native queue prepare failed:', error);
+    } finally {
+      backgroundNextPreparing = false;
+    }
+  };
+
   const prepareGaplessNext = (options?: {
     position?: number;
     allowAtEnd?: boolean;
@@ -1840,6 +2044,11 @@ export const createPlaybackManager = (
     gaplessTransition?: boolean;
     preserveFailureChain?: boolean;
   }) => {
+    if (
+      !options?.automatic && !options?.gaplessTransition &&
+      getPlaybackSourceQueueId() !== PERSONAL_FM_QUEUE_ID &&
+      engine.supportsNativePlaybackQueue() && await engine.skipNativeQueueTrack(1)
+    ) return;
     const { sourceQueueId, sourceQueue, list } = getPlaybackSourceContext();
     if (sourceQueueId === PERSONAL_FM_QUEUE_ID) {
       await advancePersonalFm(options?.gaplessTransition === true);
@@ -1906,6 +2115,7 @@ export const createPlaybackManager = (
   };
 
   const prev = async () => {
+    if (engine.supportsNativePlaybackQueue() && await engine.skipNativeQueueTrack(-1)) return;
     const { sourceQueueId, list } = getPlaybackSourceContext();
     if (list.length === 0) return;
 
@@ -2186,6 +2396,8 @@ export const createPlaybackManager = (
     stop,
     recoverFromStall,
     tryNextAudioCandidate,
+    prepareBackgroundNext,
+    adoptNativePlaybackSnapshot,
     prepareGaplessNext,
     activateGaplessPreparedTransition,
     clearGaplessPreparedSource,

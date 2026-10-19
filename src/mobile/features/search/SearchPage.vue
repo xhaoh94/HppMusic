@@ -17,7 +17,8 @@ import { useRoute, useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
 import SearchResults from './SearchResults.vue';
-import { getHotCategories, type HotCategory } from '@mobile/adapters/search';
+import { getHotCategories, getSearchSuggestions, type HotCategory } from '@mobile/adapters/search';
+import { useSearchSuggestions } from '@mobile/composables/useSearchSuggestions';
 import { useSettingStore } from '@/stores/setting';
 import logger from '@/utils/logger';
 import { iconClose, iconSearch, iconRemove } from '@mobile/icons';
@@ -28,6 +29,23 @@ const setting = useSettingStore();
 
 const keyword = ref(String(route.query.q ?? ''));
 const inputRef = ref<HTMLInputElement | null>(null);
+const {
+  suggestions,
+  cancel: cancelSuggestions,
+  startComposition,
+  endComposition,
+  canSubmitOnEnter,
+} = useSearchSuggestions(keyword, getSearchSuggestions);
+
+const onCompositionEnd = (event: CompositionEvent) => {
+  endComposition((event.target as HTMLInputElement).value);
+};
+
+const onEnter = (event: KeyboardEvent) => {
+  if (!canSubmitOnEnter(event)) return;
+  event.preventDefault();
+  submit();
+};
 
 /** 当前生效的搜索词（来自路由，而不是输入框 —— 输入框可以边打字边过滤） */
 const activeKeyword = computed(() => String(route.query.q ?? '').trim());
@@ -56,8 +74,9 @@ const loadHot = async () => {
 
 const submit = (value?: string) => {
   const next = (value ?? keyword.value).trim();
-  if (!next) return;
   keyword.value = next;
+  cancelSuggestions();
+  if (!next) return;
   setting.addToSearchHistory(next);
   // 同词重复搜索也要重新触发（replace 到同一个 query 不会触发 watch）
   if (activeKeyword.value === next) {
@@ -69,6 +88,7 @@ const submit = (value?: string) => {
 
 const clear = () => {
   keyword.value = '';
+  cancelSuggestions();
   void router.replace({ name: 'search' });
   inputRef.value?.focus();
 };
@@ -86,6 +106,7 @@ watch(
   () => route.query.q,
   (value) => {
     keyword.value = String(value ?? '');
+    cancelSuggestions();
   },
 );
 
@@ -110,7 +131,9 @@ onMounted(() => {
         autocomplete="off"
         placeholder="搜索音乐、歌手、专辑"
         aria-label="搜索音乐、歌手、专辑"
-        @keyup.enter="submit()"
+        @compositionstart="startComposition"
+        @compositionend="onCompositionEnd"
+        @keydown.enter="onEnter"
       />
       <button
         v-if="keyword"
@@ -122,6 +145,17 @@ onMounted(() => {
         <Icon :icon="iconClose" width="16" height="16" />
       </button>
     </div>
+
+    <section v-if="suggestions.length" class="suggestions scroll-y" aria-label="搜索建议">
+      <ul class="suggestion-list">
+        <li v-for="item in suggestions" :key="item">
+          <button type="button" class="suggestion-item" @click="submit(item)">
+            <Icon :icon="iconSearch" width="16" height="16" class="search-icon" />
+            <span class="ellipsis">{{ item }}</span>
+          </button>
+        </li>
+      </ul>
+    </section>
 
     <SearchResults v-if="activeKeyword" :key="activeKeyword" :keywords="activeKeyword" />
 
@@ -225,6 +259,36 @@ onMounted(() => {
   height: 28px;
   border-radius: 50%;
   color: var(--text-tertiary);
+}
+
+.suggestions {
+  flex: 0 0 auto;
+  max-height: 40vh;
+  margin: 0 var(--sp-4) var(--sp-3);
+  padding: var(--sp-1) var(--sp-3);
+  border-radius: var(--radius-md);
+  background: var(--bg-input);
+}
+
+.suggestion-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.suggestion-item {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  width: 100%;
+  min-height: 44px;
+  text-align: left;
+  color: var(--text-primary);
+  font-size: var(--font-md);
+}
+
+.suggestion-item:active {
+  background: var(--fill-subtle);
 }
 
 .discovery {

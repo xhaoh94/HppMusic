@@ -17,7 +17,7 @@ import type { Song } from '@/models/song';
 import type { PlaylistMeta } from '@/models/playlist';
 import type { AlbumMeta } from '@/models/album';
 import type { ArtistMeta } from '@/models/artist';
-import { search, getSearchHot } from '@/api/search';
+import { search, getSearchHot, getSearchSuggest } from '@/api/search';
 import { mapSearchSong } from '@/utils/mappers/song';
 import { mapPlaylistMeta, mapAlbumMeta, mapArtistMeta } from '@/utils/mappers/playlist';
 
@@ -192,6 +192,39 @@ export const searchByType = async (
   const hasMore =
     items.length > 0 && (total !== null ? page * SEARCH_PAGE_SIZE < total : items.length >= SEARCH_PAGE_SIZE);
   return { items, total, hasMore };
+};
+
+/* ────────────────────────────────────────────────────────────
+   实时联想
+   ──────────────────────────────────────────────────────────── */
+
+/**
+ * /search/suggest → /v2/getSearchTip 的实测响应为
+ * { data: [{ LableName, RecordDatas: [{ HintInfo }] }] }，不是搜索结果的 data.list。
+ * 按上游顺序保留关键词（含歌曲、歌手等），不使用跳转信息，也不渲染上游 HTML。
+ */
+export const parseSearchSuggestions = (payload: unknown): string[] => {
+  const record = toRecord(payload);
+  if (record?.status === 0 || !Array.isArray(record?.data)) return [];
+
+  const keywords = new Set<string>();
+  for (const group of record.data) {
+    const entries = toRecord(group)?.RecordDatas;
+    if (!Array.isArray(entries)) continue;
+    for (const entry of entries) {
+      const hint = toRecord(entry)?.HintInfo;
+      if (typeof hint !== 'string' || !hint.trim()) continue;
+      keywords.add(hint.trim());
+      if (keywords.size === 10) return [...keywords];
+    }
+  }
+  return [...keywords];
+};
+
+export const getSearchSuggestions = async (keywords: string): Promise<string[]> => {
+  const query = keywords.trim();
+  if (!query) return [];
+  return parseSearchSuggestions(await getSearchSuggest(query));
 };
 
 /* ────────────────────────────────────────────────────────────

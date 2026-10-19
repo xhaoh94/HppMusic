@@ -45,7 +45,6 @@ import { songKeyOf } from '@mobile/utils/songKey';
 import { filterSongsByQuery } from '@/utils/songList';
 import { captureUserSession } from '@/utils/userSession';
 import { useUserStore } from '@/stores/user';
-import { openPlayerOnSelect } from '@mobile/composables/usePlaybackPrefs';
 import logger from '@/utils/logger';
 import type { Song } from '@/models/song';
 import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
@@ -160,7 +159,8 @@ const clearSearch = () => {
  */
 const onSelect = (song: Song) => {
   const context = displayedSongs.value;
-  if (openPlayerOnSelect.value) void router.push({ name: 'player' });
+  // 点歌直接进播放页（原「点歌后进播放页」设置已去掉，这个行为固定下来）
+  void router.push({ name: 'player' });
   void playSong(song, context, QUEUE_META).catch((error) => {
     // 原来这里是 await，reject 会变成未处理的 Promise rejection；显式接住，只记日志
     logger.warn('FreeListen', 'Play failed', error);

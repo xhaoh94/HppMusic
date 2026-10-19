@@ -37,7 +37,7 @@ import SubTabBar from './SubTabBar.vue';
 import BottomBar from './BottomBar.vue';
 import { homeTabs } from './useHomeTabs';
 import { pushBackHandler } from '@bridge/backButton';
-import { clearAutoOpenedPlayerParent, goBackOneLevel } from '@mobile/router';
+import { goBackOneLevel } from '@mobile/router';
 
 const route = useRoute();
 const router = useRouter();
@@ -99,14 +99,6 @@ onMounted(() => {
   const off = pushBackHandler(() => goBackOneLevel(router, route.name));
   onUnmounted(off);
 });
-
-// 离开播放页就清掉"自动改道来源"，避免残留的记号影响之后某次返回
-watch(
-  () => route.name,
-  (name) => {
-    if (name !== 'player') clearAutoOpenedPlayerParent();
-  },
-);
 </script>
 
 <template>

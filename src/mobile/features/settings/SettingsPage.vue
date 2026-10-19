@@ -33,10 +33,7 @@ import PageHeader from '@mobile/components/PageHeader.vue';
 import Sheet from '@mobile/components/Sheet.vue';
 import SettingsSection from '@mobile/components/settings/SettingsSection.vue';
 import SwitchRow from '@mobile/components/settings/SwitchRow.vue';
-import {
-  autoPlayAndOpenOnEnter,
-  openPlayerOnSelect,
-} from '@mobile/composables/usePlaybackPrefs';
+import { coPlayWithOthers } from '@mobile/composables/usePlaybackPrefs';
 import SegmentedRow from '@mobile/components/settings/SegmentedRow.vue';
 import ActionRow from '@mobile/components/settings/ActionRow.vue';
 import { setThemePreference, themePreference, type ThemePreference } from '@mobile/design/theme';
@@ -144,38 +141,22 @@ onMounted(async () => {
         <SwitchRow
           v-model="setting.autoPlayOnLaunch"
           label="启动时自动播放"
-          description="打开应用后自动恢复上次的播放"
         />
         <SwitchRow
           v-model="setting.volumeFade"
           label="音量淡入淡出"
-          description="切歌与暂停时平滑过渡，避免爆音"
         />
         <SwitchRow
           v-model="setting.autoNext"
           label="播放失败自动下一首"
-          description="当前曲目无法播放时自动跳过"
-        />
-        <!--
-          下面两项是**移动端自己的偏好**（存在 localStorage，不在内核 setting 里——
-          那是只读 vendor）。它们只影响歌曲列表页（目前是随便听）的跳转行为。
-        -->
-        <SwitchRow
-          v-model="autoPlayAndOpenOnEnter"
-          label="进入页面时自动播"
-          description="切入随便听时自动播并打开播放页；之后进入也会回播放页，但不会顶掉你按下的暂停"
         />
         <SwitchRow
-          v-model="openPlayerOnSelect"
-          label="点歌后进播放页"
-          description="在列表里点一首歌后直接打开播放页；关着则留在列表方便连试"
+          v-model="coPlayWithOthers"
+          label="与其他音源同时播放"
         />
       </SettingsSection>
 
-      <SettingsSection
-        title="音质"
-        description="实际可用音质取决于账号权限；无权限时会自动降级到可播放的音质。"
-      >
+      <SettingsSection title="音质">
         <SegmentedRow
           v-model="setting.defaultAudioQuality"
           label="默认音质"
@@ -198,12 +179,10 @@ onMounted(async () => {
         <SwitchRow
           v-model="lyric.wantTranslation"
           label="显示翻译"
-          description="有译文时显示在原文下方"
         />
         <SwitchRow
           v-model="lyric.wantRomanization"
           label="显示音译"
-          description="日韩等歌曲显示罗马音"
         />
         <SegmentedRow
           v-model="conversionMode"
@@ -226,7 +205,6 @@ onMounted(async () => {
         <ActionRow
           tone="danger"
           label="清除本地数据"
-          description="设置、播放队列、播放历史与登录状态都会清空"
           @click="resetOpen = true"
         />
       </SettingsSection>

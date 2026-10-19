@@ -1,7 +1,7 @@
 /**
  * 主页分区顶部子页签的目录与持久化。
  *
- * 信息架构沿用参考产品：底部三栏固定，「主页」这一栏内部再放最多 3 个可自定义的
+ * 信息架构沿用参考产品：底部三栏固定，「主页」这一栏内部再放可横向滚动的
  * 页签。目录里**只登记已经实现的页面** —— 旧方案把一个 7 项的候选清单全列出来，
  * 点进去一半是空壳，用户会以为是坏了。
  */
@@ -19,9 +19,11 @@ export const HOME_TAB_CATALOG: readonly HomeTab[] = [
   { key: 'free-listen', title: '随便听', path: '/main/free-listen' },
   { key: 'listen-together', title: '一起听', path: '/main/listen-together' },
   { key: 'explore', title: '探索', path: '/main/explore' },
+  { key: 'personal-fm', title: '私人 FM', path: '/main/personal-fm' },
+  { key: 'purchased', title: '已购音乐', path: '/main/purchased' },
+  { key: 'liked-playlist', title: '我喜欢的歌单', path: '/main/liked-playlist' },
 ];
 
-export const MAX_HOME_TABS = 3;
 const DEFAULT_TABS = ['home', 'free-listen'];
 const STORAGE_KEY = 'hpp.homeTabs';
 
@@ -34,7 +36,7 @@ const readSavedTabs = (): string[] => {
     const valid = keys.filter(
       (key, index) => HOME_TAB_CATALOG.some((tab) => tab.key === key) && keys.indexOf(key) === index,
     );
-    return valid.length ? valid.slice(0, MAX_HOME_TABS) : DEFAULT_TABS;
+    return valid.length ? valid : DEFAULT_TABS;
   } catch {
     return DEFAULT_TABS;
   }
@@ -58,13 +60,13 @@ const persist = () => {
 
 /** 切换一个页签的启用状态；返回错误提示（成功则返回空串）。 */
 export const toggleHomeTab = (key: string): string => {
+  if (!HOME_TAB_CATALOG.some((tab) => tab.key === key)) return '该页签不可用';
   if (homeTabKeys.value.includes(key)) {
     if (homeTabKeys.value.length === 1) return '至少保留一个页签';
     homeTabKeys.value = homeTabKeys.value.filter((item) => item !== key);
     persist();
     return '';
   }
-  if (homeTabKeys.value.length >= MAX_HOME_TABS) return `最多 ${MAX_HOME_TABS} 个，先取消一个再添加`;
   homeTabKeys.value = [...homeTabKeys.value, key];
   persist();
   return '';

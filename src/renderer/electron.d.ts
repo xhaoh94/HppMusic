@@ -783,6 +783,7 @@ export interface IElectronAPI {
     }) => Promise<void>;
     updateSkipIntervals: (payload: { forwardMs: number; backwardMs: number }) => Promise<void>;
     available: () => Promise<boolean>;
+    drainPendingEvents: () => Promise<string[]>;
     onEvent: (
       func: (event: { type: string; positionMs?: number; offsetMs?: number }) => void,
     ) => () => void;
@@ -972,6 +973,7 @@ export interface IElectronAPI {
     getState: () => Promise<{
       playing: boolean;
       paused: boolean;
+      ended?: boolean;
       duration: number;
       timePos: number;
       volume: number;
@@ -980,12 +982,36 @@ export interface IElectronAPI {
       path: string;
       audioDevice: string;
       trackSeq?: number;
+      mediaId?: string;
+      trackId?: string;
+      backgroundQueueActive?: boolean;
+      playWhenReady?: boolean;
+      generation?: number;
+      sampledAt?: number;
     } | null>;
     getRuntimeSession: () => Promise<PlayerSessionRestore | null>;
     syncRuntimeSession: (session: PlayerRuntimeSession | null) => Promise<void>;
     available: () => Promise<boolean>;
     restart: () => Promise<boolean>;
     setPauseOnDeviceDisconnect: (enabled: boolean) => Promise<void>;
+    setBackgroundNextSource?: (options: {
+      url: string;
+      trackId: string;
+      title: string;
+      artist: string;
+      album: string;
+      coverUrl?: string;
+      durationMs?: number;
+      append?: boolean;
+      currentTrackId?: string;
+      queueIndex?: number;
+      currentQueueIndex?: number;
+      generation?: number;
+    }) => Promise<void>;
+    clearBackgroundQueue?: (expectedItemCount?: number) => Promise<void>;
+    finishBackgroundQueue?: (generation: number | undefined, currentTrackId: string) => Promise<void>;
+    setBackgroundRepeatMode?: (mode: number) => Promise<void>;
+    skipQueueTrack?: (direction: number) => Promise<boolean>;
     setMediaTitle: (title: string) => Promise<void>;
     setLoopFile: (loop: boolean) => Promise<void>;
     setStallTimeout: (seconds: number) => Promise<void>;

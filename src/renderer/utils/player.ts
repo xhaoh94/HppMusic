@@ -531,12 +531,61 @@ export class PlayerEngine {
     return (await player?.commitPreparedNextSource?.(transitionMs)) ?? false;
   }
 
+  async setBackgroundNextSource(options: {
+    url: string;
+    trackId: string;
+    title: string;
+    artist: string;
+    album: string;
+    coverUrl?: string;
+    durationMs?: number;
+    append?: boolean;
+    currentTrackId?: string;
+    queueIndex?: number;
+    currentQueueIndex?: number;
+    generation?: number;
+  }): Promise<void> {
+    await player?.setBackgroundNextSource?.(options);
+  }
+
+  supportsNativePlaybackQueue(): boolean {
+    return typeof player?.setBackgroundRepeatMode === 'function';
+  }
+
+  async getNativeQueueGeneration(): Promise<number | undefined> {
+    return (await player?.getState?.())?.generation;
+  }
+
+  async skipNativeQueueTrack(direction: number): Promise<boolean> {
+    return (await player?.skipQueueTrack?.(direction)) ?? false;
+  }
+
+  async finishNativeQueuePreparation(generation: number | undefined, currentTrackId: string): Promise<void> {
+    await player?.finishBackgroundQueue?.(generation, currentTrackId);
+  }
+
+  async setBackgroundRepeatMode(mode: number): Promise<void> {
+    await player?.setBackgroundRepeatMode?.(mode);
+  }
+
+  async clearBackgroundQueue(expectedItemCount = 1): Promise<void> {
+    await player?.clearBackgroundQueue?.(expectedItemCount);
+  }
+
   adoptPreparedSource(source: string | PlaybackSource): void {
     const playbackSource = normalizePlaybackSource(source);
     if (!playbackSource.url) return;
     this.clearSeekPending();
     this.sourceUrl = getPlaybackSourceKey(playbackSource);
     this.lastTimeValue = -1;
+  }
+
+  /** 只更新 JS 引擎镜像，绝不向原生发送 load/play/seek 或修改播放队列。 */
+  adoptNativePlaybackSnapshot(source: string, time: number, duration: number, sampledAt?: number): void {
+    this.adoptPreparedSource(source);
+    this.lastTimeValue = Number.isFinite(time) ? Math.max(0, time) : 0;
+    this.lastTimeUpdateMs = sampledAt ?? Date.now();
+    this.durationValue = Number.isFinite(duration) ? Math.max(0, duration) : 0;
   }
 
   /** 下发播放卡死检测阈值（秒，0=禁用）到 native 播放引擎看门狗 */
@@ -882,6 +931,7 @@ export class PlayerEngine {
     pause?: () => void;
     previoustrack?: () => void;
     nexttrack?: () => void;
+    nativeTrackChanged?: () => void;
     seekto?: (time: number) => void;
     seekbackward?: (offset?: number) => void;
     seekforward?: (offset?: number) => void;
@@ -895,6 +945,9 @@ export class PlayerEngine {
             break;
           case 'Pause':
             handlers.pause?.();
+            break;
+          case 'NativeTrackTransition':
+            handlers.nativeTrackChanged?.();
             break;
           case 'NextSong':
             handlers.nexttrack?.();

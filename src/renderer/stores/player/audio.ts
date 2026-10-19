@@ -58,8 +58,9 @@ export const createAudioManager = (
     state.shuffleQueueLength = 0;
     state.shufflePlayed = new Set();
     state.shuffleHistory = [];
-    // Queue decisions own repeats so native looping cannot bypass song transitions.
-    engine.setLoopFile(false);
+    // Android 原生队列通过 playMode watcher 统一控制 repeat/shuffle，不能再
+    // 用单文件开关把用户刚选的循环关掉；桌面仍由 JS 队列决策重复播放。
+    if (!engine.supportsNativePlaybackQueue()) engine.setLoopFile(false);
   };
 
   const setVolumeNormalization = (enabled: boolean) => {

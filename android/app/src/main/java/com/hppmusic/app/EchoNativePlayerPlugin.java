@@ -37,11 +37,26 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private EchoPlaybackService service;
     private boolean listenerAttached;
+    private boolean appInBackground;
 
     @Override
     public void load() {
         super.load();
         ensureService(ignored -> null);
+    }
+
+    @Override
+    protected void handleOnPause() {
+        appInBackground = true;
+        if (service != null && !service.isDestroyed()) service.setAppInBackground(true);
+        super.handleOnPause();
+    }
+
+    @Override
+    protected void handleOnResume() {
+        appInBackground = false;
+        if (service != null && !service.isDestroyed()) service.setAppInBackground(false);
+        super.handleOnResume();
     }
 
     @Override
@@ -112,6 +127,13 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
         withService(call, service -> service.setSpeed(speed), ignored -> new JSObject());
     }
 
+    /** 「与其他音源同时播放」：开启后不申请音频焦点、不响应丢焦，永不因别的 App 暂停。 */
+    @PluginMethod
+    public void setCoPlayWithOthers(PluginCall call) {
+        boolean enabled = Boolean.TRUE.equals(call.getBoolean("enabled"));
+        withService(call, service -> service.setCoPlayWithOthers(enabled), ignored -> new JSObject());
+    }
+
     @PluginMethod
     public void setLoopFile(PluginCall call) {
         boolean loop = call.getBoolean("loop", false);
@@ -125,8 +147,65 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
     }
 
     @PluginMethod
+    public void setBackgroundNextSource(PluginCall call) {
+        String url = call.getString("url", "");
+        String trackId = call.getString("trackId", "");
+        String title = call.getString("title", "");
+        String artist = call.getString("artist", "");
+        String album = call.getString("album", "");
+        String coverUrl = call.getString("coverUrl", "");
+        long durationMs = call.getLong("durationMs", 0L);
+        boolean append = call.getBoolean("append", false);
+        String currentTrackId = call.getString("currentTrackId", "");
+        int queueIndex = call.getInt("queueIndex", -1);
+        int currentQueueIndex = call.getInt("currentQueueIndex", -1);
+        int expectedGeneration = call.getInt("generation", -1);
+        withService(call,
+                service -> service.setBackgroundNextSource(
+                        url, trackId, title, artist, album, coverUrl, durationMs, append, currentTrackId,
+                        queueIndex, currentQueueIndex, expectedGeneration),
+                ignored -> new JSObject());
+    }
+
+    @PluginMethod
+    public void clearBackgroundQueue(PluginCall call) {
+        int expectedItemCount = call.getInt("expectedItemCount", 1);
+        withService(call, service -> service.clearBackgroundQueue(expectedItemCount), ignored -> new JSObject());
+    }
+
+    @PluginMethod
+    public void finishBackgroundQueue(PluginCall call) {
+        int generation = call.getInt("generation", -1);
+        String currentTrackId = call.getString("currentTrackId", "");
+        withService(call, service -> service.finishBackgroundQueue(generation, currentTrackId),
+                ignored -> new JSObject());
+    }
+
+    @PluginMethod
+    public void setBackgroundRepeatMode(PluginCall call) {
+        int mode = call.getInt("mode", 0);
+        withService(call, service -> service.setBackgroundRepeatMode(mode), ignored -> new JSObject());
+    }
+
+    @PluginMethod
+    public void skipQueueTrack(PluginCall call) {
+        int direction = call.getInt("direction", 1);
+        withService(call, service -> service.skipQueueTrack(direction),
+                handled -> new JSObject().put("handled", handled));
+    }
+
+    @PluginMethod
     public void getState(PluginCall call) {
         withService(call, EchoPlaybackService::getState, this::bundleToState);
+    }
+
+    @PluginMethod
+    public void getPendingMediaControls(PluginCall call) {
+        withService(call, EchoPlaybackService::drainPendingMediaControls, controls -> {
+            JSArray events = new JSArray();
+            for (String control : controls) events.put(control);
+            return new JSObject().put("events", events);
+        });
     }
 
     @PluginMethod
@@ -308,12 +387,22 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
         JSObject result = new JSObject();
         result.put("playing", state.getBoolean("playing"));
         result.put("paused", state.getBoolean("paused"));
+        result.put("ended", state.getBoolean("ended"));
         result.put("duration", state.getDouble("duration"));
         result.put("timePos", state.getDouble("timePos"));
         result.put("volume", state.getDouble("volume"));
         result.put("speed", state.getDouble("speed"));
         result.put("trackSeq", state.getInt("trackSeq"));
         result.put("generation", state.getInt("generation"));
+        result.put("trackId", state.getString("trackId", ""));
+        result.put("path", state.getString("path", ""));
+        result.put("repeatMode", state.getInt("repeatMode"));
+        result.put("shuffleModeEnabled", state.getBoolean("shuffleModeEnabled"));
+        result.put("queueSize", state.getInt("queueSize"));
+        result.put("queueIndex", state.getInt("queueIndex"));
+        result.put("backgroundQueueActive", state.getBoolean("backgroundQueueActive"));
+        result.put("playWhenReady", state.getBoolean("playWhenReady"));
+        result.put("mediaId", state.getString("mediaId", ""));
         result.put("sampledAt", state.getLong("sampledAt"));
         return result;
     }
@@ -371,6 +460,7 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
         if (service == current && listenerAttached) return;
         detachServiceListener();
         service = current;
+        service.setAppInBackground(appInBackground);
         service.addListener(this);
         listenerAttached = true;
     }

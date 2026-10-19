@@ -17,15 +17,41 @@ interface NativePlayerPlugin {
   setSpeed(options: { speed: number }): Promise<void>;
   setLoopFile(options: { loop: boolean }): Promise<void>;
   setPauseOnDeviceDisconnect(options: { enabled: boolean }): Promise<void>;
+  setBackgroundNextSource(options: {
+    url: string;
+    trackId: string;
+    title: string;
+    artist: string;
+    album: string;
+    coverUrl?: string;
+    durationMs?: number;
+    append?: boolean;
+    currentTrackId?: string;
+    queueIndex?: number;
+    currentQueueIndex?: number;
+    generation?: number;
+  }): Promise<void>;
+  clearBackgroundQueue(options: { expectedItemCount: number }): Promise<void>;
+  finishBackgroundQueue(options: { generation?: number; currentTrackId: string }): Promise<void>;
+  setBackgroundRepeatMode(options: { mode: number }): Promise<void>;
+  skipQueueTrack(options: { direction: number }): Promise<{ handled: boolean }>;
+  setCoPlayWithOthers(options: { enabled: boolean }): Promise<void>;
+  getPendingMediaControls(): Promise<{ events: string[] }>;
   getState(): Promise<{
     playing: boolean;
     paused: boolean;
+    ended?: boolean;
     duration: number;
     timePos: number;
     volume: number;
     speed: number;
     trackSeq: number;
     generation: number;
+    mediaId?: string;
+    trackId?: string;
+    path?: string;
+    backgroundQueueActive?: boolean;
+    playWhenReady?: boolean;
     sampledAt: number;
   }>;
   cacheAudioResource(options: { name: string; data: string }): Promise<{ path: string }>;
@@ -106,15 +132,41 @@ type PlayerBridge = {
   setSpeed: (speed: number) => Promise<void>;
   setLoopFile: (loop: boolean) => Promise<void>;
   setPauseOnDeviceDisconnect: (enabled: boolean) => Promise<void>;
+  setBackgroundNextSource: (options: {
+    url: string;
+    trackId: string;
+    title: string;
+    artist: string;
+    album: string;
+    coverUrl?: string;
+    durationMs?: number;
+    append?: boolean;
+    currentTrackId?: string;
+    queueIndex?: number;
+    currentQueueIndex?: number;
+    generation?: number;
+  }) => Promise<void>;
+  clearBackgroundQueue: (expectedItemCount?: number) => Promise<void>;
+  finishBackgroundQueue: (generation: number | undefined, currentTrackId: string) => Promise<void>;
+  setBackgroundRepeatMode: (mode: number) => Promise<void>;
+  skipQueueTrack: (direction: number) => Promise<boolean>;
+  setCoPlayWithOthers: (enabled: boolean) => Promise<void>;
+  drainPendingMediaControls: () => Promise<string[]>;
   getState: () => Promise<{
     playing: boolean;
     paused: boolean;
+    ended?: boolean;
     duration: number;
     timePos: number;
     volume: number;
     speed: number;
     trackSeq: number;
     generation: number;
+    mediaId?: string;
+    trackId?: string;
+    path?: string;
+    backgroundQueueActive?: boolean;
+    playWhenReady?: boolean;
     sampledAt: number;
   }>;
   available: () => Promise<boolean>;
@@ -166,6 +218,7 @@ type MediaControlsBridge = {
   }) => Promise<void>;
   updateSkipIntervals: (payload: { forwardMs: number; backwardMs: number }) => Promise<void>;
   available: () => Promise<boolean>;
+  drainPendingEvents: () => Promise<string[]>;
   onEvent: (handler: (event: { type: string; positionMs?: number; offsetMs?: number }) => void) => Unsubscribe;
   notificationPermission: () => Promise<{ granted: boolean; required: boolean }>;
   requestNotificationPermission: () => Promise<{
@@ -258,6 +311,13 @@ const createPlayer = (): PlayerBridge => {
     setLoopFile: async (loop) => NativePlayer.setLoopFile({ loop }),
     setPauseOnDeviceDisconnect: async (enabled) =>
       NativePlayer.setPauseOnDeviceDisconnect({ enabled }),
+    setBackgroundNextSource: async (options) => NativePlayer.setBackgroundNextSource(options),
+    clearBackgroundQueue: async (expectedItemCount = 1) => NativePlayer.clearBackgroundQueue({ expectedItemCount }),
+    finishBackgroundQueue: async (generation, currentTrackId) => NativePlayer.finishBackgroundQueue({ generation, currentTrackId }),
+    setBackgroundRepeatMode: async (mode) => NativePlayer.setBackgroundRepeatMode({ mode }),
+    skipQueueTrack: async (direction) => (await NativePlayer.skipQueueTrack({ direction })).handled,
+    setCoPlayWithOthers: async (enabled) => NativePlayer.setCoPlayWithOthers({ enabled }),
+    drainPendingMediaControls: async () => (await NativePlayer.getPendingMediaControls()).events,
     getState: () => NativePlayer.getState(),
     available: async () => (await NativePlayer.available()).available,
     playWithFade: async (targetVolume, durationMs, requestId) => {
@@ -313,6 +373,7 @@ const createMediaControls = (): MediaControlsBridge => ({
   updateTimeline: (payload) => NativePlayer.updateTimeline(payload),
   updateSkipIntervals: (payload) => NativePlayer.updateSkipIntervals(payload),
   available: async () => (await NativePlayer.mediaControlsAvailable()).available,
+  drainPendingEvents: async () => (await NativePlayer.getPendingMediaControls()).events,
   onEvent: (handler) => listen('mediaControl', handler),
   notificationPermission: () => NativePlayer.notificationPermission(),
   requestNotificationPermission: () => NativePlayer.requestNotificationPermission(),

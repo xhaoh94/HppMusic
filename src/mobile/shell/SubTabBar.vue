@@ -13,7 +13,6 @@ import Sheet from '@mobile/components/Sheet.vue';
 import { iconAdd } from '@mobile/icons';
 import {
   HOME_TAB_CATALOG,
-  MAX_HOME_TABS,
   homeTabKeys,
   homeTabs,
   resetHomeTabs,
@@ -73,9 +72,7 @@ const onReset = () => {
   </header>
 
   <Sheet v-model="editorOpen" title="主页页签">
-    <p class="editor-hint">
-      最多显示 {{ MAX_HOME_TABS }} 个<span v-if="editorHint"> · {{ editorHint }}</span>
-    </p>
+    <p v-if="editorHint" class="editor-hint">{{ editorHint }}</p>
     <div class="editor-chips">
       <button
         v-for="tab in HOME_TAB_CATALOG"

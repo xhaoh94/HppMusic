@@ -8,6 +8,8 @@ import { useUserStore } from './user';
 import logger from '@/utils/logger';
 import { normalizePlayerErrorPayload, PlayerEngine, type PlayerEngineEvents } from '@/utils/player';
 import type { Song } from '@/models/song';
+import { createNativePlaybackReconciler, nativeSnapshotTrackId } from '../../shared/nativePlaybackSnapshot';
+import { nativeQueueMode } from '../../shared/nativeQueueMode';
 import type { PlayerErrorPayload } from '../../shared/playerError';
 import {
   createPlaybackClock,
@@ -883,6 +885,17 @@ export const usePlayerStore = defineStore(
         () => JSON.stringify(getActiveSpatialAudioEffect()),
         () => spatialAudioEffectQueue.enqueue(getActiveSpatialAudioEffect()),
       );
+      const unsubscribeNativePlayMode = watch(
+        () => [state.playMode, state.currentSourceQueueId] as const,
+        ([mode, sourceQueueId]) => {
+          if (!engine.supportsNativePlaybackQueue()) return;
+          // FM 的推荐队列始终向前，不把已听历史当作列表循环。
+          void engine.setBackgroundRepeatMode(sourceQueueId === PERSONAL_FM_QUEUE_ID ? 0 : nativeQueueMode(mode))
+            .then(() => playbackManager.prepareBackgroundNext())
+            .catch((error) => logger.warn('Player', 'Sync native play mode failed', error));
+        },
+        { immediate: true, flush: 'sync' },
+      );
       const unsubscribeGaplessQueueDecision = watch(
         () => playbackManager.getGaplessInvalidationKey(),
         () => playbackManager.clearGaplessPreparedSource(),
@@ -981,6 +994,7 @@ export const usePlayerStore = defineStore(
         unsubscribePauseOnDeviceDisconnect();
         unsubscribeTrackTransition();
         unsubscribeSpatialAudio();
+        unsubscribeNativePlayMode();
         unsubscribeGaplessQueueDecision();
         unsubscribePendingSourceRefresh();
         unsubscribeSettings();
@@ -1132,6 +1146,8 @@ export const usePlayerStore = defineStore(
       const initialRequestSeq = state.playbackRequestSeq;
       let recoveredLiveSession = false;
       state.audioEffect = normalizeEffect(state.audioEffect);
+      // 注册前先用空回调占位，初始化完成后再绑定快照恢复。
+      let onNativeTrackChanged = () => {};
       // 提前注册 MediaSession handlers，避免启动时丢失系统媒体控制事件
       engine.setMediaSessionHandlers({
         play: () => {
@@ -1142,6 +1158,7 @@ export const usePlayerStore = defineStore(
         },
         previoustrack: () => playbackManager.prev(),
         nexttrack: () => playbackManager.next(),
+        nativeTrackChanged: () => onNativeTrackChanged(),
         seekto: (time) => playbackManager.seek(time),
         seekbackward: (offset) =>
           playbackManager.seek(
@@ -1272,8 +1289,142 @@ export const usePlayerStore = defineStore(
         state.currentTimeUpdatedAt = payload.sampledAt ?? Date.now();
       };
 
+      const handleNativePlaybackEnded = () => {
+        if (state.playbackEnded) return;
+        setEnginePlaybackStatus(state, 'stopped');
+        if (!state.recentSeekIgnoreEnd) {
+          state.playbackEnded = true;
+          const sleepTimerCompleted = sleepTimer.trackEnded();
+          emitPlayerEvent('ended');
+          if (!sleepTimerCompleted) void handlePlaybackEnded();
+        } else {
+          state.recentSeekIgnoreEnd = false;
+        }
+      };
+
+      /**
+       * 后台 WebView 可能暂停 JS 或丢掉 Capacitor 的媒体控制事件。
+       * 原生服务会暂存通知栏/耳机的上一首、下一首命令，回到前台后在这里按顺序补执行。
+       */
+      let pendingMediaControls: string[] = [];
+      const applyPendingMediaControls = async () => {
+        const controls = pendingMediaControls;
+        pendingMediaControls = [];
+        for (const type of controls) {
+          switch (type) {
+            case 'NativeTrackTransition':
+              // 已执行的原生切换只通过 getState 同步，绝不再次发出切歌命令。
+              break;
+            case 'NextSong':
+              await playbackManager.next();
+              break;
+            case 'PreviousSong':
+              await playbackManager.prev();
+              break;
+            case 'Play':
+              if (!getPlaybackIsPlaying(state)) await playbackManager.togglePlay();
+              break;
+            case 'Pause':
+              if (getPlaybackIsPlaying(state)) await playbackManager.togglePlay();
+              break;
+          }
+        }
+      };
+
+      /**
+       * 后台 WebView 可能暂停 JS 或丢掉 Capacitor 事件，导致原生播放器已经 EOF，
+       * 但渲染层没收到 playbackEnd。回到前台时以原生快照补一次生命周期，避免
+       * 播放停在曲尾后既不自动切歌、通知栏下一首也像失效。
+       */
+      const reconcileNativePlayback = createNativePlaybackReconciler({
+        captureRevision: () => JSON.stringify([
+          state.playbackRequestSeq, state.seekTimestamp, state.currentTrackId,
+          state.playbackIntent.shouldPlay, state.nativeTrackSeq,
+        ]),
+        read: async () => {
+          pendingMediaControls = (await window.electron?.mediaControls?.drainPendingEvents?.()) ?? [];
+          return window.electron?.player?.getState?.();
+        },
+        afterApply: applyPendingMediaControls,
+        apply: (playerState) => {
+          if (state.awaitingTrackLoad || !state.currentTrackId) return;
+          if (nativeSnapshotTrackId(playerState)) {
+            // 按原生落点接收，不依赖切歌次数、随机顺序或事件是否丢失。
+            if (playbackManager.adoptNativePlaybackSnapshot(playerState)) {
+              listeningTimeManager.resetPosition();
+            }
+            return;
+          }
+          if (
+            state.nativeTrackSeq && playerState.trackSeq &&
+            playerState.trackSeq !== state.nativeTrackSeq
+          ) return;
+
+          const nativeEnded =
+            playerState.ended === true ||
+            (playerState.ended === undefined &&
+              !playerState.playing &&
+              playerState.duration > 0 &&
+              playerState.timePos >= playerState.duration - 0.25);
+          if (nativeEnded) {
+            handleNativePlaybackEnded();
+            return;
+          }
+
+          if (playerState.playing && !getPlaybackIsPlaying(state)) {
+            setPlaybackIntentPlayback(state, true);
+            settingStore.syncPreventSleep(true);
+            setEnginePlaybackStatus(state, 'playing');
+          } else if (!playerState.playing && getPlaybackIsPlaying(state)) {
+            setPlaybackIntentPlayback(state, false);
+            settingStore.syncPreventSleep(false);
+            setEnginePlaybackStatus(state, 'paused');
+          }
+          if (playerState.duration > 0) state.duration = playerState.duration;
+          if (playerState.timePos >= 0 && Number.isFinite(playerState.timePos)) {
+            state.currentTime = playerState.timePos;
+            state.currentTimeUpdatedAt = Date.now();
+          }
+        },
+      });
+      onNativeTrackChanged = () => {
+        void reconcileNativePlayback().catch((error) =>
+          logger.warn('Player', 'Failed to adopt native track transition', error),
+        );
+      };
+
+      const reconcileOnResume = () => {
+        if (document.visibilityState === 'hidden') {
+          // 先在 WebView 仍可运行的这一刻解析并交给原生，避免后台 EOF 时
+          // 只能等用户回到 App 才有机会取下一首地址。
+          void playbackManager.prepareBackgroundNext().catch((error) =>
+            logger.warn('Player', 'Failed to prepare background next source', error),
+          );
+          return;
+        }
+        void reconcileNativePlayback().catch((error) =>
+          logger.warn('Player', 'Failed to reconcile native playback after resume', error),
+        );
+      };
+      document.addEventListener('visibilitychange', reconcileOnResume);
+      window.addEventListener('pageshow', reconcileOnResume);
+      window.addEventListener('focus', reconcileOnResume);
+      onScopeDispose(() => {
+        document.removeEventListener('visibilitychange', reconcileOnResume);
+        window.removeEventListener('pageshow', reconcileOnResume);
+        window.removeEventListener('focus', reconcileOnResume);
+      });
+
       const events: PlayerEngineEvents = {
         timeUpdate: (currentTime, payload) => {
+          if (
+            window.electron?.platform === 'android' && !state.awaitingTrackLoad &&
+            Number(payload?.trackSeq) > Number(state.nativeTrackSeq ?? 0)
+          ) {
+            // 合并读取期间原生可能又切了一首；后续原生 tick 会补齐最新落点。
+            onNativeTrackChanged();
+            return;
+          }
           if (!isCurrentNativePlaybackContext(payload) || getPlaybackHasFailed(state)) return;
           // Only file-loaded may bind the native sequence for a new track. While an
           // async source is resolving, these ticks can still belong to the old track.
@@ -1306,6 +1457,15 @@ export const usePlayerStore = defineStore(
           state.currentTimeUpdatedAt = payload?.sampledAt ?? now;
           listeningTimeManager.tick();
           void playbackManager.prepareGaplessNext();
+          // 移动端在距结尾约 90 秒时就开始建立原生队列，给取链留出时间；
+          // 不等退后台后才开始，避免用户刚按 Home 就被系统暂停 JS。
+          if (
+            window.electron?.platform === 'android' &&
+            state.duration > 0 &&
+            state.duration - currentTime <= 90
+          ) {
+            void playbackManager.prepareBackgroundNext();
+          }
           if (now - lastEventTimeUpdate >= EVENT_TIMEUPDATE_MS) {
             lastEventTimeUpdate = now;
             emitPlayerEvent('timeupdate');
@@ -1402,17 +1562,10 @@ export const usePlayerStore = defineStore(
           if (
             !state.currentTrackId ||
             state.awaitingTrackLoad ||
-            !isCurrentNativePlaybackContext(payload) ||
-            state.playbackEnded
+            !isCurrentNativePlaybackContext(payload)
           )
             return;
-          setEnginePlaybackStatus(state, 'stopped');
-          if (!state.recentSeekIgnoreEnd) {
-            state.playbackEnded = true;
-            const sleepTimerCompleted = sleepTimer.trackEnded();
-            emitPlayerEvent('ended');
-            if (!sleepTimerCompleted) handlePlaybackEnded();
-          } else state.recentSeekIgnoreEnd = false;
+          handleNativePlaybackEnded();
         },
         play: (payload) => {
           if (state.awaitingTrackLoad) return;
@@ -1552,24 +1705,9 @@ export const usePlayerStore = defineStore(
         },
       };
       engine.setEvents(events);
-      window.electron?.player?.getState?.().then((playerState) => {
-        if (!playerState) return;
-        if (state.playbackRequestSeq !== initialRequestSeq || state.awaitingTrackLoad) return;
-        if (state.nativeTrackSeq && playerState.trackSeq !== state.nativeTrackSeq) return;
-        if (playerState.playing && !getPlaybackIsPlaying(state)) {
-          setPlaybackIntentPlayback(state, true);
-          settingStore.syncPreventSleep(true);
-        }
-        setEnginePlaybackStatus(
-          state,
-          playerState.playing ? 'playing' : playerState.paused ? 'paused' : 'idle',
-        );
-        if (playerState.duration > 0) state.duration = playerState.duration;
-        if (playerState.timePos > 0) {
-          state.currentTime = playerState.timePos;
-          state.currentTimeUpdatedAt = Date.now();
-        }
-      });
+      void reconcileNativePlayback().catch((error) =>
+        logger.warn('Player', 'Initial native playback reconciliation failed', error),
+      );
       resolveInitialization();
       return recoveredLiveSession;
     };

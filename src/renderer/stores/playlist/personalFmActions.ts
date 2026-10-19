@@ -7,6 +7,7 @@ import { useUserStore } from '@/stores/user';
 import { isPlayableSong } from '@/utils/song';
 import { mapTopSong } from '@/utils/mappers';
 import { PERSONAL_FM_MODE, PERSONAL_FM_QUEUE_ID } from './constants';
+import { excludePlayedFmRecommendations } from '../../../shared/personalFmBuffer';
 import {
   appendQueueSong,
   dedupeSongs,
@@ -87,6 +88,15 @@ type PersonalFmStoreShape = {
     isOverplay?: boolean;
   }) => Promise<number>;
   updatePersonalFmMode: (mode: PersonalFmMode) => void;
+};
+
+const mergePersonalFmBuffer = (store: PersonalFmStoreShape, songs: Song[]): number => {
+  const history = store.playbackQueues.find((queue) => queue.id === PERSONAL_FM_QUEUE_ID)?.songs ?? [];
+  const previous = store.personalFmBuffer.length;
+  store.personalFmBuffer = toRawSongList(excludePlayedFmRecommendations(
+    history, mergeQueueSongs(store.personalFmBuffer, songs), resolveSongQueueKey,
+  ));
+  return Math.max(0, store.personalFmBuffer.length - previous);
 };
 
 const captureFmRequest = (store: PersonalFmStoreShape) => {
@@ -251,8 +261,7 @@ export const personalFmActions = {
     })
       .then((songs) => {
         if (!isCurrent()) return 0;
-        this.personalFmBuffer = toRawSongList(mergeQueueSongs(this.personalFmBuffer, songs));
-        return songs.length;
+        return mergePersonalFmBuffer(this, songs);
       })
       .catch((error) => {
         logger.warn('PlaylistStore', 'Replenish personal fm failed:', error);
@@ -287,8 +296,7 @@ export const personalFmActions = {
     )
       .then((songs) => {
         if (!isCurrent()) return 0;
-        this.personalFmBuffer = toRawSongList(mergeQueueSongs(this.personalFmBuffer, songs));
-        return songs.length;
+        return mergePersonalFmBuffer(this, songs);
       })
       .catch((error) => {
         logger.warn('PlaylistStore', 'Report personal fm advance failed:', error);
@@ -318,8 +326,7 @@ export const personalFmActions = {
       .then((songs) => {
         if (!isCurrent()) return 0;
         if (songs.length === 0) return 0;
-        this.personalFmBuffer = toRawSongList(mergeQueueSongs(this.personalFmBuffer, songs));
-        return songs.length;
+        return mergePersonalFmBuffer(this, songs);
       })
       .catch((error) => {
         logger.warn('PlaylistStore', 'Report personal fm feedback failed:', error);
@@ -473,7 +480,11 @@ export const personalFmActions = {
     }
   },
 
-  async refreshPersonalFmPreview(this: PersonalFmStoreShape, mode?: PersonalFmMode) {
+  async refreshPersonalFmPreview(
+    this: PersonalFmStoreShape,
+    mode?: PersonalFmMode,
+    options?: { throwOnError?: boolean },
+  ) {
     const presentation = getPersonalFmModePresentation(mode ?? this.personalFmMode);
     this.updatePersonalFmMode(presentation.mode);
     this.personalFmSessionEpoch++;
@@ -492,6 +503,7 @@ export const personalFmActions = {
       return songs;
     } catch (error) {
       logger.warn('PlaylistStore', 'Refresh personal fm preview failed:', error);
+      if (options?.throwOnError) throw error;
       return [] as Song[];
     }
   },
