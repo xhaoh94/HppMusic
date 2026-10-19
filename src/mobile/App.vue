@@ -85,9 +85,8 @@ onMounted(() => {
   <AppShell>
     <!--
       不在名单里的页面仍然正常渲染，只是不进缓存。
-      组件名由各页的 `defineOptions({ name })` 显式声明：`<script setup>` 的
-      文件名推导不算可靠（改名/嵌套目录都会影响），而名单对不上时是**静默失效**
-      （缓存没了，但不报错），所以宁可写死。
+      组件名由各页的 `<script setup>` 显式声明：文件名推导不算可靠，
+      而名单对不上时是静默失效，所以宁可写死。
     -->
     <router-view v-slot="{ Component }">
       <KeepAlive :include="CACHED_PAGES">
@@ -99,3 +98,13 @@ onMounted(() => {
   <VerificationSheet />
   <AuthExpiredSheet />
 </template>
+
+<style>
+/*
+ * 页签动画不放在这里，也不套 <Transition>：
+ * Transition 与 KeepAlive 叠加时，被缓存的页面会被当成“离开”而摘掉 DOM，
+ * 重新激活时不再插回——实测从「我的」返回主页后页面空白。
+ * 改为在 AppShell 的内容区上播一次入场动画（见 shell/AppShell.vue），
+ * 缓存与滚动位置都不受影响。
+ */
+</style>

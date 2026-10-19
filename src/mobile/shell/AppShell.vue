@@ -31,7 +31,7 @@
  * 全屏页（`meta.shell === false`：播放/登录/启动/404）除外 —— 它们自己吃
  * 安全区，外壳再垫就是双重留白，播放页顶部还会因此露出一条外壳底色带。
  */
-import { computed, onMounted, onUnmounted, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import SubTabBar from './SubTabBar.vue';
 import BottomBar from './BottomBar.vue';
@@ -86,6 +86,44 @@ const onShellTouchEnd = (event: TouchEvent) => {
   switchToNeighborTab(dx < 0 ? 1 : -1);
 };
 
+/** 页面内容区：切页时在它身上播一次入场动画。 */
+const contentRef = ref<HTMLElement | null>(null);
+/**
+ * 当前正在播的入场动画（必须走响应式绑定）。
+ * '' = 不动画；'tab' = 页签左右切；'player' = 播放页从下方升起。
+ */
+const pageTransition = ref<'' | 'tab' | 'player'>('');
+
+/**
+ * 播放一次入场动画。
+ *
+ * ⚠️ 故意不用 `<Transition>` 包 `<KeepAlive>`：那样被缓存的页面会被当成
+ * “离开”摘掉 DOM，再激活时不插回 —— 实测从「我的」返回主页后内容空白。
+ * 这里只在容器上重新触发一次 CSS 动画，页面实例和滚动位置都不动。
+ *
+ * ⚠️ class 必须通过响应式绑定加，不能直接 `classList.add`：模板上已有 `:class`，
+ * Vue 每次 patch 会把整个 className 重写一遍，手动加的 class 会被抹掉（实测动画从未生效）。
+ */
+const playPageTransition = async (kind: 'tab' | 'player') => {
+  pageTransition.value = '';
+  // 先让 Vue 把 class 去掉，再强制重排，最后重新打开，连点两个页签也能每次看到动画
+  await nextTick();
+  void contentRef.value?.offsetWidth;
+  pageTransition.value = kind;
+};
+
+watch(
+  () => route.path,
+  () => {
+    // 页签（主页分区 / 我的）横向切；播放页从下方升起；
+    // 登录页、搜索结果、详情页这类入栈导航不做位移（它们有自己的交互语义）。
+    if (route.name === 'player') void playPageTransition('player');
+    else if (route.meta.section === 'main' || route.name === 'profile')
+      void playPageTransition('tab');
+    else pageTransition.value = '';
+  },
+);
+
 /**
  * 系统返回键的最后一站：上层浮层都没消费时，按语义退一级。
  *
@@ -106,8 +144,14 @@ onMounted(() => {
     <SubTabBar v-if="subTabVisible" />
 
     <main
+      ref="contentRef"
       class="shell-content"
-      :class="{ 'has-sub-tabs': subTabVisible, 'is-fullscreen': !shellVisible }"
+      :class="{
+        'has-sub-tabs': subTabVisible,
+        'is-fullscreen': !shellVisible,
+        'is-tab-switching': pageTransition === 'tab',
+        'is-player-switching': pageTransition === 'player',
+      }"
       @touchstart="onShellTouchStart"
       @touchend="onShellTouchEnd"
     >
@@ -154,5 +198,54 @@ onMounted(() => {
    铺不到 padding 那条 strip 里。 */
 .shell-content.is-fullscreen {
   padding-top: 0;
+}
+
+/*
+ * 页签切换入场动画：淡入 + 轻微横移。
+ *
+ * 用 CSS 动画而不是 Vue <Transition>：见 App.vue 里的说明，Transition 与 KeepAlive
+ * 叠加会让缓存页面空白。动画只改 opacity/transform，不参与布局，不会引起跳动；
+ * 结束后 transform 回到 none，不影响页面内 absolute/fixed 定位（弹层已 Teleport 到 body）。
+ */
+.shell-content.is-tab-switching {
+  animation: shell-tab-in 200ms var(--ease-decelerate);
+}
+
+/*
+ * 播放页：从下方升起。全屏页本身是满铺背景，起始帧 opacity 为 0，
+ * 所以位移期间不会露出外壳底色。
+ */
+.shell-content.is-player-switching {
+  animation: shell-player-in 260ms var(--ease-decelerate);
+}
+
+@keyframes shell-player-in {
+  from {
+    opacity: 0;
+    transform: translateY(28px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes shell-tab-in {
+  from {
+    opacity: 0;
+    transform: translateX(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* 系统开了“减少动态效果”就不做位移 */
+@media (prefers-reduced-motion: reduce) {
+  .shell-content.is-tab-switching,
+  .shell-content.is-player-switching {
+    animation: none;
+  }
 }
 </style>
