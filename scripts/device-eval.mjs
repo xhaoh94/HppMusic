@@ -13,7 +13,7 @@
  *   （Windows 上 adb 在 %LOCALAPPDATA%\Android\Sdk\platform-tools\adb.exe，
  *    该命令要在 Git Bash 里跑；见 scripts/device-forward.sh）
  */
-const CDP_HOST = 'http://127.0.0.1:9222';
+const CDP_HOST = process.env.CDP_HOST || 'http://127.0.0.1:9222';
 
 const args = process.argv.slice(2);
 const consoleSecondsIndex = args.indexOf('--console');

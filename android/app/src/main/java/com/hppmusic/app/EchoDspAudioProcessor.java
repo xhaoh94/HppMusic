@@ -58,6 +58,11 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
 
     /** 每段增益（dB），index 对齐 BAND_FREQUENCIES。 */
     private volatile float[] bandGainsDb = new float[BAND_COUNT];
+    /**
+     * 预衰减（线性）。10 段峰值滤波串联后很容易冲过 0dBFS，旧实现只有最后一句 clamp，
+     * 听感就是"糊、刺"——这是均衡器效果差的直接原因。按最大正增益等量衰减即可留出余量。
+     */
+    private volatile float preampGain = 1.0f;
     private volatile Biquad[] biquads = Biquad.identityChain(BAND_COUNT);
     private volatile boolean eqActive;
     private volatile float normalizationGain = 1.0f;
@@ -88,6 +93,7 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
     protected AudioFormat onConfigure(AudioFormat inputFormat)
             throws UnhandledAudioFormatException {
         if (inputFormat.encoding != C.ENCODING_PCM_16BIT) {
+            Log.w("EchoDsp", "不支持的编码，DSP 将被跳过: " + inputFormat);
             throw new UnhandledAudioFormatException(inputFormat);
         }
         sampleRate = inputFormat.sampleRate;
@@ -173,7 +179,7 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
                 short raw = input.getShort();
                 float sample = raw / 32768.0f;
                 if (gainActive) sample *= gain;
-                if (eqActive) sample = applyEqualizer(sample, channel, filters);
+                if (eqActive) sample = applyEqualizer(sample * preampGain, channel, filters);
                 frameScratch[channel] = sample;
             }
             if (centerActive) applyCenterChannel(frameScratch, center);
@@ -190,7 +196,7 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
                     }
                     value = sample * dry + convolved * wet;
                 }
-                value = Math.max(-1.0f, Math.min(1.0f, value));
+                value = softClip(value);
                 output.putShort((short) Math.round(value * 32767.0f));
             }
             if (convolutionActive) {
@@ -209,6 +215,24 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
      *
      * 两者都是算法近似，不是上游那种重录版本 —— 效果有限，但确实听得出来。
      */
+    /**
+     * 软限幅（soft clip）。
+     *
+     * 旧实现是裸的 `min(1,max(-1,x))`：一旦过载就是硬切，产生大量奇次谐波，
+     * 听感是"刺、炸"。这里在 0.8 之后用一个廉价的有理曲线压限
+     * （x/(1+x) 近似 tanh，比 Math.tanh 便宜得多，可以放在音频线程里），
+     * 过载时只是逐渐变平，不会突然出现刺耳谐波。
+     */
+    private static float softClip(float value) {
+        final float threshold = 0.8f;
+        float magnitude = Math.abs(value);
+        if (magnitude <= threshold) return value;
+        float over = (magnitude - threshold) / (1.0f - threshold);
+        float limited = threshold + (1.0f - threshold) * (over / (1.0f + over));
+        if (limited > 1.0f) limited = 1.0f;
+        return value < 0 ? -limited : limited;
+    }
+
     private void applyCenterChannel(float[] frame, int center) {
         float left = frame[0];
         float right = frame[1];
@@ -327,9 +351,20 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
         }
         bandGainsDb = next;
         eqActive = active;
+        preampGain = computePreamp(next);
         rebuildBiquads();
         // 滤波器状态重置交给音频线程（跨线程换 filterState 会与 applyEqualizer 竞态）
         dspStateDirty = true;
+    }
+
+    /** 预衰减：max(增益) > 0 时整体降这么多 dB。 */
+    private static float computePreamp(float[] gains) {
+        float maxGainDb = 0.0f;
+        for (float gain : gains) {
+            if (gain > maxGainDb) maxGainDb = gain;
+        }
+        if (maxGainDb <= FLAT_EPSILON_DB) return 1.0f;
+        return (float) Math.pow(10.0, -maxGainDb / 20.0);
     }
 
     public float[] getEqualizerGainsDb() {
@@ -499,12 +534,15 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
             return output;
         }
 
+        /** 按能量归一化（不是"峰值>1 才除"）：湿声响度才有可预期的一致性。 */
         private static void normalize(float[] values) {
-            float peak = 0.0f;
-            for (float value : values) peak = Math.max(peak, Math.abs(value));
-            if (peak > 1.0f) {
-                for (int i = 0; i < values.length; i++) values[i] /= peak;
-            }
+            double energy = 0.0;
+            for (float value : values) energy += (double) value * value;
+            if (energy <= 1e-9) return;
+            double gain = 1.0 / Math.sqrt(energy);
+            gain = Math.max(0.05, Math.min(20.0, gain));
+            float scale = (float) gain;
+            for (int i = 0; i < values.length; i++) values[i] *= scale;
         }
     }
 

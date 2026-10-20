@@ -100,13 +100,11 @@ const onGainInput = (index: number, event: Event) => {
 
 const applyEq = () => {
   player.setEq(gains.value);
-  toast.success('均衡器已应用');
 };
 
 const resetEq = () => {
   gains.value = BANDS.map(() => 0);
   player.setEq(gains.value);
-  toast.info('已重置为平直');
 };
 
 /**
@@ -125,7 +123,6 @@ const applyPreset = (preset: (typeof EQ_PRESETS)[number]) => {
   if (activePresetId.value === preset.id) return;
   gains.value = [...preset.gains];
   player.setEq(gains.value);
-  toast.success(`已应用「${preset.label}」`);
 };
 
 /* ── 我的音效 ── */
@@ -143,13 +140,11 @@ const activeEffectId = computed(() =>
 const selectEffect = (id: string) => {
   if (!id) {
     setting.impulseResponseEnabled = false;
-    toast.info('已关闭音效');
     return;
   }
   const applied = player.selectSpatialAudioEffect(id);
   if (!applied) return;
   const file = usableEffects.value.find((item) => item.id === id);
-  toast.success(`已应用「${file?.name ?? '音效'}」`);
 };
 
 const effectName = (file: { name?: string; label?: string }) => file.name || file.label || '未命名音效';
@@ -264,7 +259,6 @@ const applyMarketEffect = async (effect: CommunityAudioEffect) => {
       return;
     }
     setting.addImpulseResponseFile(result.file, { select: true });
-    toast.success(`已应用「${effect.name}」`);
   } finally {
     downloadingId.value = 0;
   }
@@ -275,7 +269,6 @@ const uninstallMarketEffect = (effect: CommunityAudioEffect) => {
   const id = marketFileId(effect);
   if (!isMarketInstalled(effect)) return;
   setting.removeImpulseResponseFile(id);
-  toast.info(`已卸载「${effect.name}」`);
 };
 
 /**
@@ -291,7 +284,6 @@ const selectMarketEffect = (effect: CommunityAudioEffect) => {
   if (activeEffectId.value === id) return;
   const applied = player.selectSpatialAudioEffect(id);
   if (!applied) return;
-  toast.success(`已应用「${effect.name}」`);
 };
 
 const marketMeta = (effect: CommunityAudioEffect) => {

@@ -390,12 +390,18 @@ onMounted(async () => {
 }
 
 .ghost-button,
-.danger-button {
-  flex: 1;
+.danger-button,
+.primary-button {
+  /* 三个按钮共用一套尺寸：不然「下载并安装」这种长文案会溢出按钮底色（用户截图） */
+  flex: 1 1 0;
+  min-width: 0;
   min-height: 48px;
+  padding: 0 var(--sp-3);
   border-radius: var(--radius-md);
   font-size: var(--font-md);
   font-weight: var(--weight-medium);
+  white-space: nowrap;
+  text-align: center;
 }
 
 .ghost-button {
@@ -403,10 +409,20 @@ onMounted(async () => {
   background: var(--fill-subtle);
 }
 
+.danger-button {
+  color: #fff;
+  background: var(--danger);
+}
+
 .primary-button {
   color: var(--accent-on);
   background: var(--accent);
 }
+
+.primary-button:active {
+  filter: brightness(0.94);
+}
+
 
 /* ── 更新面板 ── */
 .update-body {

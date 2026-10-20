@@ -1526,6 +1526,24 @@ export const createPlaybackManager = (
 
     const autoPlay = options?.autoPlay ?? true;
     const snapshot = toRawSong(track);
+    /**
+     * 用户**在加载过程中**按了暂停吗？
+     *
+     * 点歌之后到真正出声之间要等一次取链 + 一次加载（几百毫秒）。旧实现在这段
+     * 时间里按暂停只是把 UI 置成暂停，加载完成后下面照样 `engine.play()` 并
+     * `completePlaybackIntent(isPlaying: true)`、`setEnginePlaybackStatus('playing')`
+     * —— 于是 UI 又变回“播放中”，可是声音因为暂停命令早已下发而没出来。
+     * 用户看到的就是“进度条/弹幕/按钮都是播放态，但没有声音”。
+     */
+    const userCancelledPlayback = () =>
+      !state.playbackIntent.shouldPlay || requestSeq !== state.playbackRequestSeq;
+
+    logger.info('TransportDiag', 'playTrack:begin', {
+      trackId: String(id),
+      requestSeq,
+      autoPlay,
+      intent: state.playbackIntent.shouldPlay,
+    });
 
     // Cancel old opens/play/fades before resolving the URL, retaining the output device.
     engine.beginSourceChange();
@@ -1698,7 +1716,17 @@ export const createPlaybackManager = (
       }
       engine.applyTrackLoudness(resolved.loudness);
       engine.setLoopFile(false);
-      if (autoPlay) {
+      // 加载完成后再确认一次：期间用户可能已经按了暂停，那就不要再出声。
+      const shouldPlay = autoPlay && !userCancelledPlayback();
+      logger.info('TransportDiag', 'playTrack:before-play', {
+        shouldPlay,
+        autoPlay,
+        intent: state.playbackIntent.shouldPlay,
+        phase: state.playbackIntent.phase,
+        reqSeq: state.playbackRequestSeq,
+        nativeTrackSeq: state.nativeTrackSeq,
+      });
+      if (shouldPlay) {
         if (settingStore.volumeFade) {
           const fadeMs = clampNumber(settingStore.volumeFadeTime ?? 1000, 500, 3000);
           await engine.play({ fadeIn: true, fadeDurationMs: fadeMs });
@@ -1707,6 +1735,29 @@ export const createPlaybackManager = (
         }
       }
       if (requestSeq !== state.playbackRequestSeq) return;
+
+      /**
+       * ⚠️ 提交状态必须**重新判一次意图**，不能用上面那个 `shouldPlay`。
+       *
+       * `engine.play()`（尤其带淡入）会 await 一秒左右；用户完全可能在这段时间里
+       * 按了暂停。那时 intent 已经是 false、原生也已经 pause 了，若还拿旧值提交，
+       * 就会把 UI 翻回"播放中"——按钮/进度条/弹幕全显示在播，实际没有声音。
+       * 实测日志：`playTrack:after-play {"shouldPlay":true,"engine":"paused","intent":false}`。
+       */
+      const playbackCommitted = autoPlay && !userCancelledPlayback();
+      logger.info('TransportDiag', 'playTrack:after-play', {
+        shouldPlay,
+        playbackCommitted,
+        engine: state.enginePlayback.status,
+        intent: state.playbackIntent.shouldPlay,
+        appVolume: state.volume,
+        fadeEnabled: settingStore.volumeFade,
+      });
+
+      if (shouldPlay && !playbackCommitted) {
+        // 播放命令已经发出去、但用户中途按了暂停：把声音停掉，别让它在后台出声。
+        await engine.pause().catch(() => undefined);
+      }
 
       // 在 engine.play() 成功后立即记录本地历史，使用闭包捕获的 snapshot
       // 避免因 player end-file 事件竞态导致 state.currentTrackSnapshot 被下一首覆盖
@@ -1717,8 +1768,9 @@ export const createPlaybackManager = (
       state.autoNextSourceTrackId = String(track.id);
       clearAutoNextTimer();
       if (!state.duration && !engine.duration && track.duration) state.duration = track.duration;
-      if (!autoPlay || !settingStore.volumeFade) engine.setVolume(state.volume);
-      if (!autoPlay) {
+      if (!playbackCommitted || !settingStore.volumeFade) engine.setVolume(state.volume);
+      if (!playbackCommitted) {
+        // 用户在加载途中按了暂停：保持暂停态，别把 UI 翻回播放（也没有声音在出）。
         completePlaybackIntent(state, requestSeq, { isPlaying: false });
         setEnginePlaybackStatus(state, 'paused', resolvedId);
         engine.updateMediaPlaybackState(buildStoppedPlaybackState(state));
@@ -1731,6 +1783,8 @@ export const createPlaybackManager = (
         requestSeq,
         nativeTrackSeq: state.nativeTrackSeq,
         autoPlay,
+        shouldPlay,
+        playbackCommitted,
       });
       void resolver.fetchClimaxMarks(track);
     } catch (error) {
@@ -1765,7 +1819,26 @@ export const createPlaybackManager = (
   };
 
   const togglePlay = async () => {
-    if (state.isResuming) return;
+    /**
+     * 方向以**用户意图**为准，而不是"当前是否在播"：
+     * 意图是"播放"时这次点击就是暂停，反之是播放。
+     *
+     * ⚠️ 旧实现开头是 `if (state.isResuming) return;`——正在恢复播放的那几百毫秒里，
+     * 用户按暂停会被直接忽略，随后 resume 把声音放出来；而 UI 侧可能已经被别的
+     * 事件置成了暂停，于是出现"按钮显示播放、进度条却还在走"。现在允许打断。
+     */
+    const wantsPause = state.playbackIntent.shouldPlay || getPlaybackIsPlaying(state);
+    logger.info('TransportDiag', 'togglePlay:enter', {
+      wantsPause,
+      intent: state.playbackIntent.shouldPlay,
+      phase: state.playbackIntent.phase,
+      isPlaying: getPlaybackIsPlaying(state),
+      isResuming: state.isResuming,
+      awaiting: state.awaitingTrackLoad,
+      engine: state.enginePlayback.status,
+      reqSeq: state.playbackRequestSeq,
+      trackId: state.currentTrackId,
+    });
 
     if (!state.currentTrackId) {
       if (playlistStore.activeQueue?.id === PERSONAL_FM_QUEUE_ID) {
@@ -1783,13 +1856,20 @@ export const createPlaybackManager = (
       return;
     }
 
-    if (getPlaybackIsPlaying(state)) {
+    if (wantsPause) {
       fmAdvanceId++;
+      // 让在途的 resume 也立刻失效：它完成时会检查意图，不再把状态翻回"播放中"。
+      state.isResuming = false;
       setPlaybackIntentPlayback(state, false);
+      setEnginePlaybackStatus(state, 'paused');
       settingStore.syncPreventSleep(false);
       engine.updateMediaPlaybackState(buildMediaState(state));
       engine.pause().catch((err) => logger.error('PlayerPlayback', 'Pause failed', err));
-      setEnginePlaybackStatus(state, 'paused');
+      logger.info('TransportDiag', 'togglePlay:pause-dispatched', {
+        intent: state.playbackIntent.shouldPlay,
+        engine: state.enginePlayback.status,
+        reqSeq: state.playbackRequestSeq,
+      });
       return;
     }
 
@@ -1817,6 +1897,13 @@ export const createPlaybackManager = (
       const timeoutMs = (settingStore.playResumeTimeout ?? 5) * 1000;
       await engine.play({ timeoutMs: timeoutMs > 0 ? timeoutMs : undefined });
       if (!isCurrentResume()) return;
+      // 恢复期间用户可能已经按了暂停：此时必须把刚启动的播放再停掉，
+      // 否则会出现"UI 已暂停、原生还在放"的错位状态。
+      if (!state.playbackIntent.shouldPlay) {
+        await engine.pause().catch(() => undefined);
+        setEnginePlaybackStatus(state, 'paused');
+        return;
+      }
       setEnginePlaybackStatus(state, 'playing');
     } catch (error) {
       if (!isCurrentResume()) return;

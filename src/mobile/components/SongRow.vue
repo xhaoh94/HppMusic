@@ -9,7 +9,7 @@
  */
 import { computed } from 'vue';
 import { Icon } from '@iconify/vue';
-import { iconMusic } from '@mobile/icons';
+import { iconMusic, iconPause, iconPlay } from '@mobile/icons';
 import { songKeyOf } from '@mobile/utils/songKey';
 import { getSongDerivedState } from '@/utils/song';
 import type { Song } from '@/models/song';
@@ -22,8 +22,12 @@ const props = withDefaults(
     showIndex?: boolean;
     /** 当前播放中的曲目 */
     active?: boolean;
+    /** 是否在当前曲目的封面上显示播放/暂停按钮（随便听用） */
+    showPlayToggle?: boolean;
+    /** 当前是否正在播放（决定封面上显示暂停还是播放图标） */
+    playing?: boolean;
   }>(),
-  { index: -1, showIndex: false, active: false },
+  { index: -1, showIndex: false, active: false, showPlayToggle: false, playing: false },
 );
 
 /**
@@ -32,7 +36,12 @@ const props = withDefaults(
  */
 const songKey = computed(() => songKeyOf(props.song));
 
-const emit = defineEmits<{ select: [song: Song]; longpress: [song: Song] }>();
+const emit = defineEmits<{
+  select: [song: Song];
+  longpress: [song: Song];
+  /** 点封面上的按钮：切换播放/暂停（不触发 select） */
+  togglePlay: [];
+}>();
 
 const cover = computed(() => props.song.coverUrl || props.song.cover || '');
 const artist = computed(() => props.song.artist || props.song.albumName || '未知歌手');
@@ -113,9 +122,24 @@ const onClick = () => {
   >
     <span v-if="showIndex && index >= 0" class="song-index">{{ index + 1 }}</span>
 
-    <div class="song-cover">
+    <div class="song-cover" :class="{ 'has-toggle': showPlayToggle && active }">
       <img v-if="cover" :src="cover" alt="" loading="lazy" />
       <Icon v-else :icon="iconMusic" width="18" height="18" class="cover-fallback" />
+      <!--
+        当前曲目的封面播放/暂停按钮：播放中显示暂停，暂停显示播放。
+        点在按钮上只切播放状态，不会再走整行的 select（否则等于又点了一遍这首歌）。
+      -->
+      <button
+        v-if="showPlayToggle && active"
+        type="button"
+        class="cover-toggle"
+        :aria-label="playing ? '暂停' : '继续播放'"
+        @click.stop="emit('togglePlay')"
+        @pointerdown.stop
+        @pointerup.stop
+      >
+        <Icon :icon="playing ? iconPause : iconPlay" width="16" height="16" />
+      </button>
     </div>
 
     <div class="song-meta">
@@ -164,6 +188,7 @@ const onClick = () => {
 }
 
 .song-cover {
+  position: relative;
   flex: 0 0 44px;
   width: 44px;
   height: 44px;
@@ -183,6 +208,23 @@ const onClick = () => {
 
 .cover-fallback {
   color: var(--text-tertiary);
+}
+
+/* 封面上覆盖的播放/暂停按钮：半透明黑底 + 白色图标，任何封面上都看得清 */
+.cover-toggle {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  color: #fff;
+  background: rgb(0 0 0 / 42%);
+}
+
+.cover-toggle:active {
+  background: rgb(0 0 0 / 55%);
 }
 
 .song-meta {

@@ -61,6 +61,7 @@ import {
   iconAudioWave,
   iconBack,
   iconFavorite,
+  iconFavoriteFilled,
   iconMessageCircle,
   iconMore,
   iconMusic,
@@ -138,8 +139,6 @@ const cycleSkin = () => {
   const index = SKINS.findIndex((item) => item.value === skin.value);
   const next = SKINS[(index + 1) % SKINS.length];
   setSkin(next.value);
-  // 换肤提示只是确认一下，1.2 秒就够：默认 2.6 秒会一直压在歌词上（用户反馈“提示有点久”）
-  toast.info(`视图：${next.label}`, 1200);
 };
 
 const isPortrait = computed(() => skin.value === 'portrait');
@@ -159,14 +158,13 @@ const playModeIcon = computed(() => {
 });
 
 /**
- * 切换播放模式并立刻回显结果。
- * 三档循环（列表循环 / 单曲循环 / 随机播放），光看图标易混，用一小段提示明确当前档位。
- * 时长压到 1.2s：够看清，又不至于挡在按钮上。
+ * 切换播放模式。
+ *
+ * 不再弹提示（用户要求去掉）：按钮本身会换图标，弹窗反而挡住操作。
  */
 const onCyclePlayMode = () => {
   cyclePlayMode();
   // cycle 里同步写 state.playMode，这里读到的 label 已是切换后的模式
-  toast.mini(playModeLabel.value, 'info', 1200);
 };
 
 /* ── 进度 ── */
@@ -325,11 +323,16 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="func-button"
-          :class="{ 'is-active': isCurrentFavorite }"
+          :class="{ 'is-favorite': isCurrentFavorite }"
           :aria-label="isCurrentFavorite ? '取消收藏' : '收藏'"
           @click="onToggleFavorite"
         >
-          <Icon :icon="iconFavorite" width="22" height="22" />
+          <!-- 已收藏 = 实心红心；未收藏 = 描边心。形状 + 颜色都变，不只换色 -->
+          <Icon
+            :icon="isCurrentFavorite ? iconFavoriteFilled : iconFavorite"
+            width="22"
+            height="22"
+          />
         </button>
         <button type="button" class="func-button" aria-label="更多" @click="moreOpen = true">
           <Icon :icon="iconMore" width="22" height="22" />
@@ -381,8 +384,18 @@ onBeforeUnmount(() => {
           :disabled="!hasTrack && !queueSongs.length"
           @click="togglePlay()"
         >
-          <Icon v-if="isLoading" :icon="iconPlay" width="34" height="34" class="pulse" />
-          <Icon v-else :icon="isPlaying ? iconPause : iconPlay" width="34" height="34" />
+          <!--
+            图标只由"是否在播"决定。旧实现在 isLoading 时固定显示播放图标（带 pulse），
+            于是"点歌后加载中"这段时间按钮看起来是"未播放"，与真实状态相反
+            （用户反馈：点了暂停后按钮还是播放样式）。
+            加载中只额外加 pulse 动画，不改图标语义。
+          -->
+          <Icon
+            :icon="isPlaying ? iconPause : iconPlay"
+            width="34"
+            height="34"
+            :class="{ pulse: isLoading }"
+          />
         </button>
 
         <button
@@ -683,6 +696,11 @@ onBeforeUnmount(() => {
   color: var(--accent);
 }
 
+/* 已收藏：实心红心（用户要求跟随主流音乐 App 的红色实心） */
+.func-button.is-favorite {
+  color: var(--like);
+}
+
 /* 写真模式下底栏图标要亮起来（背景是图片） */
 .is-portrait .func-button {
   color: rgba(255, 255, 255, 0.82);
@@ -690,6 +708,10 @@ onBeforeUnmount(() => {
 
 .is-portrait .func-button.is-active {
   color: var(--accent);
+}
+
+.is-portrait .func-button.is-favorite {
+  color: var(--like);
 }
 
 .progress-slider {

@@ -6,8 +6,8 @@
  * 「登录已过期」），但**渲染完全自研** —— 桌面那套 Toast 组件带 hover 暂停、
  * 复杂堆叠与入场曲线，在触屏上没有意义。
  *
- * 位置固定在底部栏之上：那条区域在小屏上是最不遮挡内容的（顶部有状态栏，
- * 中间是用户正在看的列表）。
+ * 位置：**屏幕中间偏上**（用户明确要求，原来是贴底部栏）。提示出现在视线
+ * 自然停留的位置，不必低头找；同时避开底部栏与页面底部的操作区。
  */
 import { computed } from 'vue';
 import { Icon } from '@iconify/vue';
@@ -16,8 +16,39 @@ import { iconError, iconInfo, iconSuccess, iconWarning } from '@mobile/icons';
 
 const toast = useToastStore();
 
-/** mini 变体只在极短消息时用，视觉上是一颗胶囊；standard 是带标题/动作的卡片。 */
+/**
+ * 提示统一停留 **1 秒**（用户要求）。
+ *
+ * 内核 store 的默认是 2600ms，部分调用点还显式传了 4s 左右（例如"已加入我喜欢"）。
+ * 直接改内核会被 `sync:upstream` 覆盖，所以在移动端宿主这里包一层 show()：
+ * 超过 1s 的截到 1s，本来就短的保持不变。
+ */
+const MAX_TOAST_MS = 1000;
+let toastDurationPatched = false;
+const patchToastDuration = () => {
+  if (toastDurationPatched) return;
+  toastDurationPatched = true;
+  const original = toast.show.bind(toast);
+  toast.show = ((message, tone = 'info', duration = MAX_TOAST_MS, action, presentation, title) =>
+    original(
+      message,
+      tone,
+      Math.min(duration ?? MAX_TOAST_MS, MAX_TOAST_MS),
+      action,
+      presentation,
+      title,
+    )) as typeof toast.show;
+};
+patchToastDuration();
+
+/**
+ * 只渲染**最新一条**：新提示直接顶掉旧的（用户要求，不再堆叠）。
+ *
+ * store 的 items 是"老的在前、新的在后"（早先按 DOM 顺序验证过），
+ * 所以最新一条是数组末尾；直接取下标会比 reverse() 少一次分配。
+ */
 const items = computed(() => toast.items ?? []);
+const current = computed(() => items.value[items.value.length - 1] ?? null);
 
 const iconForTone = (tone: string) => {
   if (tone === 'success') return iconSuccess;
@@ -35,35 +66,35 @@ const onAction = (id: number, handler: () => void) => {
 <template>
   <Teleport to="body">
     <div class="toast-host" aria-live="polite" aria-atomic="false">
-      <TransitionGroup name="toast">
+      <Transition name="toast" mode="out-in">
         <div
-          v-for="item in items"
-          :key="item.id"
+          v-if="current"
+          :key="current.id"
           class="toast"
-          :class="[`is-${item.tone}`, item.variant === 'mini' ? 'is-mini' : 'is-standard']"
+          :class="[`is-${current.tone}`, current.variant === 'mini' ? 'is-mini' : 'is-standard']"
         >
           <Icon
-            v-if="item.variant !== 'mini'"
-            :icon="iconForTone(item.tone)"
+            v-if="current.variant !== 'mini'"
+            :icon="iconForTone(current.tone)"
             width="18"
             height="18"
             class="toast-icon"
           />
           <div class="toast-text">
-            <p v-if="item.title" class="toast-title">{{ item.title }}</p>
-            <p class="toast-message">{{ item.message }}</p>
+            <p v-if="current.title" class="toast-title">{{ current.title }}</p>
+            <p class="toast-message">{{ current.message }}</p>
           </div>
-          <span v-if="item.count > 1" class="toast-count">×{{ item.count }}</span>
+          <span v-if="current.count > 1" class="toast-count">×{{ current.count }}</span>
           <button
-            v-if="item.action"
+            v-if="current.action"
             type="button"
             class="toast-action"
-            @click="onAction(item.id, item.action!.handler)"
+            @click="onAction(current.id, current.action!.handler)"
           >
-            {{ item.action.label }}
+            {{ current.action.label }}
           </button>
         </div>
-      </TransitionGroup>
+      </Transition>
     </div>
   </Teleport>
 </template>
@@ -74,8 +105,12 @@ const onAction = (id: number, handler: () => void) => {
   left: 0;
   right: 0;
   z-index: var(--z-toast);
-  /* 抬到底部栏之上；不随页面滚动 */
-  bottom: calc(var(--safe-bottom) + var(--bottom-bar-height) + var(--sp-3));
+  /*
+   * 位置固定在屏幕**中间偏上**（bottom: 70dvh ≈ 距顶 30%）。
+   * 只显示一条提示，所以不再需要堆叠方向的处理。
+   */
+  top: auto;
+  bottom: 70dvh;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -156,17 +191,14 @@ const onAction = (id: number, handler: () => void) => {
   color: var(--accent);
 }
 
-/* ── 进出场 ── */
+/* ── 进出场：只做淡入淡出（用户要求，不再位移） ── */
 .toast-enter-active,
 .toast-leave-active {
-  transition:
-    opacity var(--duration-normal) var(--ease-standard),
-    transform var(--duration-normal) var(--ease-standard);
+  transition: opacity var(--duration-fast) var(--ease-standard);
 }
 
 .toast-enter-from,
 .toast-leave-to {
   opacity: 0;
-  transform: translateY(8px) scale(0.98);
 }
 </style>

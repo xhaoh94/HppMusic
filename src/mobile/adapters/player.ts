@@ -192,40 +192,79 @@ export const bootstrapPlayer = (): Promise<void> => {
        * 后果是启动时稳定弹一次"播放失败"、3 秒后还会自动切歌。
        * 等首页那批请求落定再试就正常 —— 同一个网络、同一首歌。
        */
-      const resume = () => {
-        if (
-          playerStore.isPlaying ||
-          String(playerStore.currentTrackId ?? '') !== resumeTrackId
-        ) {
-          return;
-        }
-        // 不 await：取播放地址要一次网络往返，别拖住启动；失败只记日志
-        void Promise.resolve(playerStore.togglePlay()).catch((error) => {
+      /**
+       * 启动后用户是否自己接管过播放。
+       *
+       * 续播是延迟触发的。如果用户在这段窗口里手动点了播放又马上暂停，旧判断只看
+       * "当前是不是在播"，会认为"还没播起来"，于是到点后**又把音乐放起来**
+       * —— 用户反馈的"点了播放立刻暂停，很快又自己播了"正是这个。
+       * 只要本次启动出现过"正在播放"，就不再自动续播。
+       */
+      let playedSinceLaunch = false;
+      const stopPlayedWatch = watch(
+        () => playerStore.isPlaying,
+        (playing) => {
+          if (playing) playedSinceLaunch = true;
+        },
+        { immediate: true },
+      );
+
+      const isStillResumeTarget = () =>
+        !playedSinceLaunch &&
+        !playerStore.isPlaying &&
+        String(playerStore.currentTrackId ?? '') === resumeTrackId;
+
+      /**
+       * 尝试续播。返回 true 表示"已经不在待续播状态"（正在播 / 用户接管 / 换了歌）。
+       */
+      const attemptResume = async (): Promise<boolean> => {
+        if (!isStillResumeTarget()) return true;
+        try {
+          await Promise.resolve(playerStore.togglePlay());
+        } catch (error) {
           logger.warn('MobilePlayer', 'Auto play on launch failed', error);
-        });
+        }
+        return !isStillResumeTarget();
       };
 
-      window.setTimeout(resume, LAUNCH_RESUME_FIRST_DELAY_MS);
+      /**
+       * 只保留**一次**盲等 + 失败后**一次**重试。
+       *
+       * 盲等的 3 秒有明确原因（见上面注释）：启动瞬间首页那批并发请求会把取链的
+       * 音质授权序号顶掉，立刻续播必然拿到空地址。但**没有必要再无条件排第二次**——
+       * 之前那个 8 秒定时器无论第一次是否成功都会跑一遍，既多余又容易和用户操作打架
+       * （用户点播放又暂停，8 秒后又被"续播"起来）。现在改成：第一次没成功才重试。
+       */
       window.setTimeout(() => {
-        resume();
-        /**
-         * 重试后仍没播起来 → 把关键状态写进日志。
-         *
-         * 这条是给"从设备上定位"用的：用户报的现象是启动续播失败、同一首歌手动
-         * 点又能播。有这几个字段就能判断是"曲目对象缺字段（hash/albumAudioId）"
-         * 还是"上游/网络拒绝"。
-         */
-        if (!playerStore.isPlaying) {
-          const snapshot = playerStore.currentTrackSnapshot as Song | null;
-          logger.warn('MobilePlayer', 'Auto play on launch still idle after retry', {
-            trackId: playerStore.currentTrackId,
-            hash: String(snapshot?.hash ?? ''),
-            albumAudioId: String(snapshot?.albumAudioId ?? snapshot?.mixSongId ?? ''),
-            hasAudioUrl: Boolean(snapshot?.audioUrl),
+        void (async () => {
+          if (await attemptResume()) return;
+          logger.warn('MobilePlayer', 'Auto play on launch failed, retrying once', {
+            trackId: resumeTrackId,
             lastError: playerStore.lastError,
           });
-        }
-      }, LAUNCH_RESUME_FIRST_DELAY_MS + LAUNCH_RESUME_RETRY_MS);
+          window.setTimeout(() => {
+            void (async () => {
+              if (await attemptResume()) return;
+              /**
+               * 重试后仍没播起来 → 把关键状态写进日志。
+               *
+               * 这条是给"从设备上定位"用的：用户报的现象是启动续播失败、同一首歌手动
+               * 点又能播。有这几个字段就能判断是"曲目对象缺字段（hash/albumAudioId）"
+               * 还是"上游/网络拒绝"。
+               */
+              const snapshot = playerStore.currentTrackSnapshot as Song | null;
+              logger.warn('MobilePlayer', 'Auto play on launch still idle after retry', {
+                trackId: playerStore.currentTrackId,
+                hash: String(snapshot?.hash ?? ''),
+                albumAudioId: String(snapshot?.albumAudioId ?? snapshot?.mixSongId ?? ''),
+                hasAudioUrl: Boolean(snapshot?.audioUrl),
+                lastError: playerStore.lastError,
+              });
+              window.setTimeout(stopPlayedWatch, 1000);
+            })();
+          }, LAUNCH_RESUME_RETRY_MS);
+        })();
+      }, LAUNCH_RESUME_FIRST_DELAY_MS);
     }
   })().catch((error) => {
     // 失败不缓存：让下一次调用能重试（网络抖动导致的失败不该永久锁死播放）

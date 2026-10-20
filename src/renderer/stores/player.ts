@@ -599,7 +599,7 @@ export const usePlayerStore = defineStore(
       inspect: (path) => window.electron.player.inspectDspProvider(path),
       unsupported: (file, reason) => {
         settingStore.selectOriginalSpatialAudio();
-        toastStore.warning(`“${file.name}”暂不可用：${reason}，已切换为原声，文件仍保留`, 5000);
+        logger.warn('Player', '音效文件不可用，已切换为原声', { file: file.name, reason });
       },
     });
     const getSpatialAudioEffectSupport = (file: SpatialAudioEffectEntry) => {
@@ -619,7 +619,8 @@ export const usePlayerStore = defineStore(
       if (!file) return false;
       const support = getSpatialAudioEffectSupport(file);
       if (support.status !== 'supported') {
-        toastStore.warning(support.reason);
+        // 音效相关的提示按要求全部去掉，失败原因只落日志便于排查
+        logger.warn('Player', '音效不可用', { effectId: id, reason: support.reason });
         return false;
       }
       if (settingStore.impulseResponseEnabled && settingStore.selectedImpulseResponseId === id)
@@ -1014,18 +1015,16 @@ export const usePlayerStore = defineStore(
           // all of the file's resources, keep the engine and preserve downloads.
           settingStore.selectOriginalSpatialAudio();
           spatialAudioEffectQueue.enqueue(getActiveSpatialAudioEffect());
-          toastStore.warning('音效应用失败，已切换为原声，文件仍保留', 4200);
+          logger.warn('Player', '音效应用失败，已切换为原声');
           return;
         }
         settingStore.disableDspProvider();
         const builtinEffect = getActiveSpatialAudioEffect();
         spatialAudioEffectQueue.enqueue(builtinEffect);
-        toastStore.warning(
-          builtinEffect
-            ? '第三方音效引擎加载失败，已改用内置音效处理'
-            : '第三方音效引擎加载失败，已自动停用',
-          4200,
-        );
+        // 音效相关提示按要求全部去掉；失败原因落日志（logcat 里搜 EchoDsp / [Player]）
+        logger.warn('Player', '第三方音效引擎加载失败', {
+          fallback: builtinEffect ? '内置音效' : '停用',
+        });
         return;
       }
       if (failedEffect) {
@@ -1037,7 +1036,7 @@ export const usePlayerStore = defineStore(
       if (!settingStore.impulseResponseEnabled) return;
       settingStore.impulseResponseEnabled = false;
       spatialAudioEffectQueue.enqueue(null);
-      toastStore.warning('音效加载失败，已自动关闭', 4200);
+      logger.warn('Player', '音效加载失败，已自动关闭');
     };
     let appliedSpatialAudioEffect: AudioEffectPlaybackOptions | null | undefined;
     const canPatchBasicDspMix = (
@@ -1556,7 +1555,17 @@ export const usePlayerStore = defineStore(
           // 新文件真正加载完成，解除切歌加载护栏，放行后续进度回报
           if (!bindNativeTrackLoad(state, payloadSeq)) return;
           state.playbackEnded = false;
-          setEnginePlaybackStatus(state, 'loading');
+          logger.info('TransportDiag', 'event:fileLoaded', {
+            payloadSeq,
+            intent: state.playbackIntent.shouldPlay,
+            phase: state.playbackIntent.phase,
+            engine: state.enginePlayback.status,
+          });
+          // 用户在加载途中按过暂停：保持暂停态，别因为“文件加载好”就闪回加载中/播放中
+          setEnginePlaybackStatus(
+            state,
+            state.playbackIntent.shouldPlay ? 'loading' : 'paused',
+          );
           // 补回加载窗口内被丢弃的真实时长，避免进度条最大值停留在 0
           if (engine.duration > 0) {
             state.duration = engine.duration;
@@ -1564,6 +1573,12 @@ export const usePlayerStore = defineStore(
           }
         },
         ended: (payload) => {
+          logger.info('TransportDiag', 'event:ended', {
+            trackSeq: payload?.trackSeq,
+            nativeTrackSeq: state.nativeTrackSeq,
+            intent: state.playbackIntent.shouldPlay,
+            awaiting: state.awaitingTrackLoad,
+          });
           if (
             !state.currentTrackId ||
             state.awaitingTrackLoad ||
@@ -1573,6 +1588,14 @@ export const usePlayerStore = defineStore(
           handleNativePlaybackEnded();
         },
         play: (payload) => {
+          logger.info('TransportDiag', 'event:play', {
+            trackSeq: payload?.trackSeq,
+            nativeTrackSeq: state.nativeTrackSeq,
+            intent: state.playbackIntent.shouldPlay,
+            phase: state.playbackIntent.phase,
+            awaiting: state.awaitingTrackLoad,
+            engine: state.enginePlayback.status,
+          });
           if (state.awaitingTrackLoad) return;
           if (!isCurrentNativePlaybackContext(payload) || getPlaybackHasFailed(state)) return;
           syncTransportPosition(payload);
@@ -1590,6 +1613,14 @@ export const usePlayerStore = defineStore(
           // 此处不再重复调用，避免同一首歌被记录两次
         },
         pause: (payload) => {
+          logger.info('TransportDiag', 'event:pause', {
+            trackSeq: payload?.trackSeq,
+            nativeTrackSeq: state.nativeTrackSeq,
+            intent: state.playbackIntent.shouldPlay,
+            phase: state.playbackIntent.phase,
+            awaiting: state.awaitingTrackLoad,
+            engine: state.enginePlayback.status,
+          });
           if (
             !isCurrentNativePlaybackContext(payload) ||
             shouldIgnoreEnginePause(state) ||

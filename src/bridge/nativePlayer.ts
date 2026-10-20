@@ -267,8 +267,20 @@ const createPlayer = (): PlayerBridge => {
     }
   };
 
+  /**
+   * 最近一次淡入淡出被取消时"停在哪个音量"。
+   *
+   * ⚠️ 淡入是从 0 开始的：期间被取消（暂停 / 切歌 / 又一次淡入）就会把音量
+   * 留在中间值甚至 0。之后若走的是"不淡入"的播放路径，就会变成
+   * **状态在播放、却完全没有声音**。这里记下来，方便恢复时兜底。
+   */
+  let lastFadeVolume = 0;
+
   const cancelFade = async (): Promise<void> => {
-    if (fadeTimer !== null) clearInterval(fadeTimer);
+    if (fadeTimer !== null) {
+      clearInterval(fadeTimer);
+      console.info(`[TransportDiag] fade:cancelled {"atVolume":${lastFadeVolume}}`);
+    }
     fadeTimer = null;
   };
 
@@ -276,22 +288,35 @@ const createPlayer = (): PlayerBridge => {
     await cancelFade();
     const start = Math.max(0, Math.min(100, Number(from) || 0));
     const target = Math.max(0, Math.min(100, Number(to) || 0));
+    console.info(
+      `[TransportDiag] fade:start {"from":${start},"to":${target},"ms":${durationMs}}`,
+    );
     if (durationMs <= 0 || start === target) {
+      lastFadeVolume = target;
       await NativePlayer.setVolume({ volume: target });
       return;
     }
     const steps = Math.max(1, Math.round(durationMs / 40));
     let step = 0;
-    await new Promise<void>((resolve, reject) => {
-      fadeTimer = setInterval(() => {
-        step += 1;
-        const ratio = Math.min(1, step / steps);
-        void NativePlayer.setVolume({ volume: start + (target - start) * ratio }).catch(reject);
-        if (ratio >= 1) {
-          void cancelFade().then(resolve);
-        }
-      }, 40);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        fadeTimer = setInterval(() => {
+          step += 1;
+          const ratio = Math.min(1, step / steps);
+          lastFadeVolume = start + (target - start) * ratio;
+          void NativePlayer.setVolume({ volume: lastFadeVolume }).catch(reject);
+          if (ratio >= 1) {
+            void cancelFade().then(resolve);
+          }
+        }, 40);
+      });
+    } finally {
+      // 兜底：无论淡入是正常结束还是被中途取消/异常，最终都把音量落到目标值。
+      // 不做这件事的话，被取消的淡入会把音量永久留在 0（表现为"在播但没声音"）。
+      lastFadeVolume = target;
+      await NativePlayer.setVolume({ volume: target }).catch(() => undefined);
+      console.info(`[TransportDiag] fade:settled {"volume":${target}}`);
+    }
   };
 
   return {
@@ -321,6 +346,9 @@ const createPlayer = (): PlayerBridge => {
     getState: () => NativePlayer.getState(),
     available: async () => (await NativePlayer.available()).available,
     playWithFade: async (targetVolume, durationMs, requestId) => {
+      console.info(
+        `[TransportDiag] playWithFade {"target":${targetVolume},"ms":${durationMs}}`,
+      );
       await NativePlayer.setVolume({ volume: 0 });
       await NativePlayer.play({ requestId });
       await fade(0, targetVolume, durationMs);

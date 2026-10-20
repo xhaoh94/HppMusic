@@ -424,38 +424,38 @@ const playSelected = (index: number) => {
   -webkit-user-select: none;
 }
 
-/* 选中行：右侧让出播放按钮的位置，避免长句被按钮盖住 */
+/* 选中行：只提亮颜色，**不改 padding** —— 改了会让整行文字向左偏（用户反馈） */
 .line.is-selected {
-  padding-right: calc(var(--sp-5) + 30px);
   color: var(--text-secondary);
 }
 
 /*
  * 选中行右侧的跳转入口：一条竖线 + 居中播放按钮。
- * 放在行内绝对定位，不参与文本流，因此不会把歌词推歪。
+ * 放在行内绝对定位，不参与文本流；宽度控制在行的右 padding（--sp-5 = 20px）
+ * 之内，所以文字位置保持不变。
  */
 .line-action {
   position: absolute;
   top: 50%;
-  right: var(--sp-2);
+  right: 2px;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
+  width: 22px;
   height: 100%;
   transform: translateY(-50%);
 }
 
 .line-action-rail {
   position: absolute;
-  top: 4px;
-  bottom: 4px;
+  top: 6px;
+  bottom: 6px;
   left: 50%;
   width: 2px;
   border-radius: var(--radius-pill);
   background: var(--accent);
   transform: translateX(-50%);
-  opacity: 0.85;
+  opacity: 0.9;
 }
 
 .line-action-play {
@@ -463,13 +463,13 @@ const playSelected = (index: number) => {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
+  /* 22px 刚好塞在右留白里，不会盖住歌词文字 */
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
   color: var(--accent-on);
   background: var(--accent);
-  /* 给竖线留出看不见的间隙，按钮看起来是“嵌在线上” */
-  box-shadow: 0 0 0 3px var(--bg-base);
+  box-shadow: 0 0 0 3px rgb(0 0 0 / 45%);
 }
 
 .line-action-play:active {

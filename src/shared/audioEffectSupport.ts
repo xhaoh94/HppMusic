@@ -1,9 +1,14 @@
 import type { AudioEffectPlaybackOptions, SpatialAudioEffectEntry } from './audio';
 import type { DspProviderManifest } from './playerAudioGraph';
 
-// Match Provider/ViPER resource semantics: an IR is fully wet unless the user
-// explicitly chooses a dry/wet blend for the Builtin engine.
-export const DEFAULT_BASIC_DSP_CONVOLUTION_MIX = 1;
+/**
+ * 内置引擎的默认干湿比。
+ *
+ * 原来是 1.0（全湿）：卷积输出完全取代原始音色，听感"闷、怪、不像原曲"，
+ * 这也是用户觉得音效市场资源效果差的原因之一。0.5 保留一半干声，
+ * 既有空间感又不丢人声与细节；用户仍可在音效面板里自行调整。
+ */
+export const DEFAULT_BASIC_DSP_CONVOLUTION_MIX = 0.5;
 
 export const normalizeConvolutionMix = (
   value: unknown,

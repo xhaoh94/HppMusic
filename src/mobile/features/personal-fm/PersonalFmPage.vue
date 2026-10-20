@@ -7,6 +7,7 @@ import SongRow from '@mobile/components/SongRow.vue';
 import {
   iconClose,
   iconFavorite,
+  iconFavoriteFilled,
   iconNext,
   iconPause,
   iconPlay,
@@ -150,7 +151,11 @@ onMounted(() => {
               :aria-label="isFavorite ? '取消收藏' : '收藏'"
               @click="toggleFavorite"
             >
-              <Icon :icon="iconFavorite" width="20" height="20" />
+              <Icon
+                :icon="isFavorite ? iconFavoriteFilled : iconFavorite"
+                width="20"
+                height="20"
+              />
             </button>
             <button
               type="button"
@@ -305,8 +310,9 @@ onMounted(() => {
 }
 
 .secondary-action.is-favorite {
-  color: var(--accent);
-  background: var(--accent-soft);
+  /* 与播放页一致：已收藏 = 实心红心 */
+  color: var(--like);
+  background: rgb(239 68 68 / 14%);
 }
 
 .secondary-action:active,

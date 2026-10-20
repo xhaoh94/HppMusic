@@ -55,7 +55,7 @@ defineOptions({ name: 'FreeListenPage' });
 const user = useUserStore();
 const router = useRouter();
 const { isPlaying } = useNowPlaying();
-const { playSong, playList, activeQueue, remainingInQueue, appendToActiveQueue } =
+const { playSong, playList, togglePlay, activeQueue, remainingInQueue, appendToActiveQueue } =
   usePlaybackActions();
 
 const QUEUE_META = FREE_LISTEN_QUEUE;
@@ -143,29 +143,30 @@ const clearSearch = () => {
 };
 
 /**
- * 点击列表里的某一首。
+ * 点列表里的某一首。
  *
- * 是否跳播放页由设置里的「点歌后进入播放页」决定（默认关）。两种都合理：
- * 关着方便连着试听几首；开着则是"挑了就走"，不用再多点一次。
+ * 两种情况，行为刻意不同：
+ * · **点的是当前正在播的那首** → 进播放页看大图/歌词，**不动播放状态**
+ *   （旧实现会重新 playSong，等于从头再放一遍 —— 用户明确不要这个）；
+ * · 点的是别的歌 → 就在本页开始播，不跳走（这页是"挑歌试听"的场景，
+ *   点一首就跳走会打断浏览）。
  *
- * ⚠️ **先跳页、再起播**（不 await 起播链路）。`playSong` 内部要等一次"拉播放地址"的
- * 网络往返，慢的时候几百毫秒起步，等它回来再 `router.push` 就是用户感觉到的
- * "点了没反应"。
- *
- * 为什么先跳也不会闪上一首：队列是**同步**设好的 —— 内核 `replaceQueueAndPlay` 里
- * `setPlaybackQueueWithOptions` 在 `playTrack` 的 await **之前**执行，
- * 所以播放页一进去就读到正确的曲目；只有播放地址与真正出声会晚一点，
- * 那时播放页自己显示加载态，比"点下去没动静"可解释得多。
+ * 想在列表里暂停/继续当前曲目，用封面上那个播放/暂停按钮。
  */
 const onSelect = (song: Song) => {
+  if (songKeyOf(song) === currentSongKey.value) {
+    void router.push({ name: 'player' });
+    return;
+  }
   const context = displayedSongs.value;
-  // 点歌直接进播放页（原「点歌后进播放页」设置已去掉，这个行为固定下来）
-  void router.push({ name: 'player' });
   void playSong(song, context, QUEUE_META).catch((error) => {
     // 原来这里是 await，reject 会变成未处理的 Promise rejection；显式接住，只记日志
     logger.warn('FreeListen', 'Play failed', error);
   });
 };
+
+/** 当前曲目封面上的播放/暂停按钮 */
+const onTogglePlay = () => void togglePlay();
 
 
 /**
@@ -320,7 +321,10 @@ onMounted(() => void load());
           :active="songKeyOf(song) === currentSongKey"
           show-index
           :index="index"
+          show-play-toggle
+          :playing="isPlaying"
           @select="onSelect"
+          @toggle-play="onTogglePlay"
         />
       </template>
     </div>
