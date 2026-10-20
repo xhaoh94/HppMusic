@@ -138,7 +138,8 @@ const cycleSkin = () => {
   const index = SKINS.findIndex((item) => item.value === skin.value);
   const next = SKINS[(index + 1) % SKINS.length];
   setSkin(next.value);
-  toast.info(`视图：${next.label}`);
+  // 换肤提示只是确认一下，1.2 秒就够：默认 2.6 秒会一直压在歌词上（用户反馈“提示有点久”）
+  toast.info(`视图：${next.label}`, 1200);
 };
 
 const isPortrait = computed(() => skin.value === 'portrait');
@@ -291,8 +292,14 @@ onBeforeUnmount(() => {
         <p class="track-artist ellipsis">{{ artist }}</p>
       </div>
 
-      <!-- 歌词：三种模式都显示；写真模式下浮在背景上 -->
-      <LyricsPanel :position-ms="positionMs" :active="true" class="lyrics-area" />
+      <!-- 歌词：三种模式都显示；写真模式下浮在背景上。
+           点空白处切皮肤（封面 → 简约 → 写真 → 封面），点某一行仍是跳行。 -->
+      <LyricsPanel
+        :position-ms="positionMs"
+        :active="true"
+        class="lyrics-area"
+        @background-click="cycleSkin"
+      />
     </div>
 
     <div class="player-bar">

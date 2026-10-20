@@ -1272,6 +1272,11 @@ export const usePlayerStore = defineStore(
       void deviceManager.refreshOutputDevices();
 
       let lastMediaSessionSync = 0;
+      /**
+       * 音频输出初始化失败的重试记账。
+       * 同一首只重试一次：真正无音源/解码器坏掉时不能无限循环。
+       */
+      const audioTrackRetry = { trackId: '', count: 0 };
       const MEDIA_SESSION_SYNC_MS = 2000;
       let lastHistoryCheck = 0;
       const HISTORY_CHECK_MS = 5000;
@@ -1638,6 +1643,31 @@ export const usePlayerStore = defineStore(
             });
             if (triedFallback) return;
             if (!isCurrentRequest()) return;
+
+            /**
+             * 音频输出初始化失败（`AudioTrack init failed`）不是音频源坏了：
+             * ExoPlayer 重建 AudioTrack 时被系统拒（常见于连续快速 seek 把旧的
+             * AudioTrack 堆满）。这种错误应该**原地重开一次**，而不是当成曲目失败
+             * 去跳下一首 —— 用户反馈的“拖歌词/连点跳转后直接切歌”就是它。
+             */
+            const audioTrackInitFailed = /AudioTrack init failed|AudioSink/i.test(
+              String(detail?.message ?? ''),
+            );
+            if (audioTrackInitFailed && audioTrackRetry.trackId !== trackId) {
+              audioTrackRetry.trackId = trackId;
+              audioTrackRetry.count += 1;
+              logger.warn('PlayerStore', 'AudioTrack 初始化失败，原地重开当前曲目', {
+                trackId,
+                position: Math.round(state.currentTime),
+              });
+              // 等系统释放上一次占用的 AudioTrack，再重开同一首（不换歌、不跳下一首）
+              await new Promise((resolve) => window.setTimeout(resolve, 400));
+              if (!isCurrentRequest()) return;
+              await playbackManager.playTrack(trackId, state.currentPlaylist ?? undefined, {
+                sourceQueueId: state.currentSourceQueueId,
+              });
+              return;
+            }
 
             state.lastError = (event as any)?.type ?? 'playback-error';
             setEnginePlaybackStatus(state, 'error');

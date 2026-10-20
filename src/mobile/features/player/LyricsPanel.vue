@@ -36,6 +36,9 @@ const props = defineProps<{
   active: boolean;
 }>();
 
+/** 点击歌词区**空白处**（不是某一行歌词）时抛出，播放页用它切换皮肤。 */
+const emit = defineEmits<{ backgroundClick: [] }>();
+
 const {
   lines,
   currentIndex,
@@ -205,6 +208,84 @@ watch(userScrollUntil, (until) => {
 });
 
 const lineText = (line: LyricLine) => line.text || '♪';
+
+/**
+ * 选中行（点击歌词行后出现）。
+ *
+ * 直接点歌词就跳转体验不好（想上下看看词就误跳了），所以改成两步：
+ * 点一下选中 → 行右侧出现一条竖线 + 中间的播放按钮 → 点按钮才真的跳转。
+ */
+const selectedIndex = ref<number | null>(null);
+
+// 换歌/歌词重新加载时清掉选中，避免指向已经不存在的行
+watch(lines, () => {
+  selectedIndex.value = null;
+});
+
+/* ── 点空白处换肤 ── */
+
+/** 按下位置：用来区分「点击」与「拖动滚动」（后者不能换肤） */
+const pointerStart = { x: 0, y: 0, armed: false, onText: false };
+
+const onPointerDown = (event: PointerEvent) => {
+  noteUserScroll();
+  pointerStart.x = event.clientX;
+  pointerStart.y = event.clientY;
+  pointerStart.armed = true;
+  // ⚠️ 必须在**按下时**就判定是不是按在文字上：
+  // 点文字会先跳行，跳行立即滚动歌词，等浏览器补发 click 时那一行已经移开，
+  // 到 click 再去量位置就会误判成“点空白”而多切一次皮肤（实测就是这样）。
+  pointerStart.onText = hitLineText(event.clientX, event.clientY);
+};
+
+/** 某个坐标是否落在歌词文字上。 */
+const hitLineText = (x: number, y: number): boolean => {
+  const element = document.elementFromPoint(x, y);
+  const line = element instanceof Element ? element.closest('.line') : null;
+  if (!line) return false;
+  const boxes = line.querySelectorAll('.line-text, .line-sub');
+  // 容差 4px：文字边缘那一下不该因为像素取整变成“空白”
+  const hit = (rect: DOMRect) =>
+    x >= rect.left - 4 && x <= rect.right + 4 && y >= rect.top - 4 && y <= rect.bottom + 4;
+  if (boxes.length === 0) return hit(line.getBoundingClientRect());
+  return Array.from(boxes).some((box) => hit(box.getBoundingClientRect()));
+};
+
+/** 本次点击（或按下）是否算“点在歌词文字上” */
+const clickedLineText = (event: MouseEvent): boolean =>
+  pointerStart.armed ? pointerStart.onText : hitLineText(event.clientX, event.clientY);
+
+const onPanelClick = (event: MouseEvent) => {
+  // 点右侧的“从这里播放”行动区：由按钮自己处理，既不是跳行也不是换皮
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest('.line-action')) return;
+  const onText = clickedLineText(event);
+  const moved =
+    pointerStart.armed &&
+    (Math.abs(event.clientX - pointerStart.x) > 8 ||
+      Math.abs(event.clientY - pointerStart.y) > 8);
+  pointerStart.armed = false;
+  // 点文字 = 选中这一行（右侧出现播放按钮）；拖动 = 滚动歌词：两者都不换皮肤
+  if (onText || moved) return;
+  selectedIndex.value = null;
+  emit('backgroundClick');
+};
+
+/** 行内点击：先选中，真正跳转要再点右侧的播放按钮。 */
+const toggleSelect = (index: number) => {
+  selectedIndex.value = selectedIndex.value === index ? null : index;
+};
+
+const onLineClick = (event: MouseEvent, index: number) => {
+  if (!clickedLineText(event)) return;
+  toggleSelect(index);
+};
+
+/** 选中行的“从这里播放”。 */
+const playSelected = (index: number) => {
+  selectedIndex.value = null;
+  seekToLine(index);
+};
 </script>
 
 <template>
@@ -212,9 +293,10 @@ const lineText = (line: LyricLine) => line.text || '♪';
     ref="scroller"
     class="lyrics"
     :style="{ '--lyric-scale': fontScale, '--lyric-weight': fontWeight }"
-    @pointerdown="noteUserScroll"
+    @pointerdown="onPointerDown"
     @wheel.passive="noteUserScroll"
     @touchmove.passive="noteUserScroll"
+    @click="onPanelClick"
   >
     <div v-if="!hasLines" class="lyrics-empty">
       <p class="lyrics-empty-text">{{ isLoading ? '正在加载歌词…' : tips }}</p>
@@ -229,11 +311,11 @@ const lineText = (line: LyricLine) => line.text || '♪';
         :key="`${index}-${line.time}`"
         :ref="(element) => setLineRef(element as Element | null, index)"
         class="line"
-        :class="{ 'is-active': index === visualIndex }"
+        :class="{ 'is-active': index === visualIndex, 'is-selected': index === selectedIndex }"
         role="button"
         tabindex="0"
-        @click="seekToLine(index)"
-        @keyup.enter="seekToLine(index)"
+        @click="onLineClick($event, index)"
+        @keyup.enter="toggleSelect(index)"
       >
         <!-- 当前行逐字高亮；其余行整行文本 -->
         <span v-if="index === visualIndex && activeCharCount >= 0" class="line-text">
@@ -252,6 +334,21 @@ const lineText = (line: LyricLine) => line.text || '♪';
         </span>
         <span v-if="showRomanization && line.romanized" class="line-sub line-romanized">
           {{ line.romanized }}
+        </span>
+
+        <!-- 选中后的跳转入口：右侧一条竖线，中间是播放按钮 -->
+        <span v-if="index === selectedIndex" class="line-action">
+          <span class="line-action-rail" aria-hidden="true" />
+          <button
+            type="button"
+            class="line-action-play"
+            :aria-label="`从这里播放：${lineText(line)}`"
+            @click.stop="playSelected(index)"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M8 5.14v13.72a1 1 0 0 0 1.53.85l10.78-6.86a1 1 0 0 0 0-1.7L9.53 4.29A1 1 0 0 0 8 5.14z" />
+            </svg>
+          </button>
         </span>
       </p>
 
@@ -309,6 +406,7 @@ const lineText = (line: LyricLine) => line.text || '♪';
 }
 
 .line {
+  position: relative;
   margin: 0;
   padding: var(--sp-3) var(--sp-5);
   /* 字号与字重来自设置页（内核 lyric store 的 fontScale / fontWeightValue），
@@ -324,6 +422,58 @@ const lineText = (line: LyricLine) => line.text || '♪';
   /* 长按会弹选择菜单，歌词页不需要 */
   user-select: none;
   -webkit-user-select: none;
+}
+
+/* 选中行：右侧让出播放按钮的位置，避免长句被按钮盖住 */
+.line.is-selected {
+  padding-right: calc(var(--sp-5) + 30px);
+  color: var(--text-secondary);
+}
+
+/*
+ * 选中行右侧的跳转入口：一条竖线 + 居中播放按钮。
+ * 放在行内绝对定位，不参与文本流，因此不会把歌词推歪。
+ */
+.line-action {
+  position: absolute;
+  top: 50%;
+  right: var(--sp-2);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 100%;
+  transform: translateY(-50%);
+}
+
+.line-action-rail {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  left: 50%;
+  width: 2px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  transform: translateX(-50%);
+  opacity: 0.85;
+}
+
+.line-action-play {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: var(--accent-on);
+  background: var(--accent);
+  /* 给竖线留出看不见的间隙，按钮看起来是“嵌在线上” */
+  box-shadow: 0 0 0 3px var(--bg-base);
+}
+
+.line-action-play:active {
+  transform: scale(0.92);
 }
 
 /* 注：没有"相邻行加亮"——当前行逐字还没唱到时整行是暗的，邻居一旦更亮，

@@ -230,7 +230,31 @@ public final class EchoPlaybackService extends MediaSessionService {
     private final Map<String, Integer> backgroundQueueIndices = new HashMap<>();
     private String backgroundInitialMediaId = "";
     private String backgroundInitialTrackId = "";
-    private final ArrayDeque<String> pendingMediaControls = new ArrayDeque<>();
+    /**
+     * 后台期间暂存的媒体按键。
+     *
+     * ⚠️ 必须带时间戳与“按下时的曲目序号”：车载蓝牙上连续按上下首时，
+     * 偶有几下会落在原生队列还没准备完的时刻（skipNativeQueueTrack 返回 false），
+     * 这些会被暂存。如果用户锁屏半小时后才回到 App，恢复时把这些**几十秒前的**
+     * 按下一股脑执行，就会凭空多切几首歌（用户反馈“解锁后自动切了新歌”正是这个）。
+     * 所以恢复时只执行“还新鲜、且曲目没变过”的那几条。
+     */
+    private final ArrayDeque<PendingControl> pendingMediaControls = new ArrayDeque<>();
+
+    private static final class PendingControl {
+        final String type;
+        final long at;
+        final int seq;
+
+        PendingControl(String type, long at, int seq) {
+            this.type = type;
+            this.at = at;
+            this.seq = seq;
+        }
+    }
+
+    /** 超过这个时长的后台按键直接作废：用户早就不知道按过什么了。 */
+    private static final long PENDING_CONTROL_TTL_MS = 10_000;
     private androidx.media3.common.AudioAttributes playbackAudioAttributes;
 
     private androidx.media3.common.AudioAttributes getPlaybackAudioAttributes() {
@@ -398,8 +422,21 @@ public final class EchoPlaybackService extends MediaSessionService {
     public CompletableFuture<List<String>> drainPendingMediaControls() {
         CompletableFuture<List<String>> future = new CompletableFuture<>();
         runOnMain(() -> {
-            List<String> controls = new ArrayList<>(pendingMediaControls);
-            pendingMediaControls.clear();
+            long now = SystemClock.uptimeMillis();
+            List<String> controls = new ArrayList<>();
+            int dropped = 0;
+            while (!pendingMediaControls.isEmpty()) {
+                PendingControl entry = pendingMediaControls.removeFirst();
+                // 过期，或按下之后曲目已经变过（说明那一下早被原生执行了）→ 丢弃
+                if (now - entry.at > PENDING_CONTROL_TTL_MS || entry.seq != sourceSeq) {
+                    dropped++;
+                    continue;
+                }
+                controls.add(entry.type);
+            }
+            if (dropped > 0) {
+                Log.i(TAG, "丢弃过期/已过时的后台媒体按键: " + dropped);
+            }
             future.complete(controls);
         });
         return future;
@@ -721,7 +758,7 @@ public final class EchoPlaybackService extends MediaSessionService {
             // 这里不能只依赖 notifyListeners：后台 WebView 可能完全不调 JS，
             // 但通知栏按钮本身已经被 Android 消费掉了。
             if (pendingMediaControls.size() >= 16) pendingMediaControls.removeFirst();
-            pendingMediaControls.addLast(type);
+            pendingMediaControls.addLast(new PendingControl(type, SystemClock.uptimeMillis(), sourceSeq));
             Log.i(TAG, "后台媒体按键已暂存: " + type);
             return;
         }

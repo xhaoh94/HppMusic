@@ -1839,7 +1839,44 @@ export const createPlaybackManager = (
     }
   };
 
+  /**
+   * 高频 seek 合并。
+   *
+   * 拖进度条、连点歌词跳转会在几百毫秒里发出很多次 seek。每次都直达原生的话，
+   * ExoPlayer 会反复重建 AudioTrack，实测会抛
+   * `AudioSink$InitializationException: AudioTrack init failed`
+   * —— 上层把它当成播放失败，直接跳下一首（用户报的就是这个）。
+   *
+   * 所以这里做 300ms 窗口合并：窗口内只保留**最后一次**目标位置，中间的直接丢弃。
+   * 用户看到的仍然是"拖到哪停在哪"，但原生只受一次命令。
+   */
+  const SEEK_COALESCE_MS = 300;
+  let lastSeekAt = 0;
+  let pendingSeekTimer: number | null = null;
+  let pendingSeekTarget: number | null = null;
+
   const seek = (time: number): Promise<void> => {
+    if (!Number.isFinite(time)) return Promise.resolve();
+    const now = Date.now();
+    if (now - lastSeekAt < SEEK_COALESCE_MS) {
+      pendingSeekTarget = time;
+      if (pendingSeekTimer === null) {
+        pendingSeekTimer = window.setTimeout(() => {
+          pendingSeekTimer = null;
+          const target = pendingSeekTarget;
+          pendingSeekTarget = null;
+          if (target === null) return;
+          lastSeekAt = Date.now();
+          void dispatchSeek(target);
+        }, SEEK_COALESCE_MS - (now - lastSeekAt));
+      }
+      return Promise.resolve();
+    }
+    lastSeekAt = now;
+    return dispatchSeek(time);
+  };
+
+  const dispatchSeek = (time: number): Promise<void> => {
     if (!Number.isFinite(time)) return Promise.resolve();
     fmAdvanceId++;
     const effectiveDuration = engine.duration > 0 ? engine.duration : state.duration;

@@ -39,8 +39,10 @@ function fixture() {
   });
   const engine = {
     adoptNativePlaybackSnapshot: vi.fn(), beginSourceChange: vi.fn(), setSource: vi.fn(),
-    play: vi.fn(), pause: vi.fn(), seek: vi.fn(), setLoopFile: vi.fn(),
+    play: vi.fn(), pause: vi.fn(), setLoopFile: vi.fn(),
     updateMediaMetadata: vi.fn(), clearBackgroundQueue: vi.fn(),
+    clearPreparedNextSource: vi.fn(), updateMediaPlaybackState: vi.fn(),
+    seek: vi.fn(async () => undefined),
     supportsNativePlaybackQueue: vi.fn(() => true), getNativeQueueGeneration: vi.fn(async () => 2),
     setBackgroundRepeatMode: vi.fn(), setBackgroundNextSource: vi.fn(), skipNativeQueueTrack: vi.fn(async () => true),
     finishNativeQueuePreparation: vi.fn(),
@@ -328,5 +330,30 @@ describe('前台恢复并发和过期快照', () => {
     expect(nativeSnapshotTrackId({ ...snapshot('a'), mediaId: 'hppmusic-1' })).toBe('a');
     expect(nativeSnapshotTrackId({ ...snapshot('c'), trackId: undefined })).toBe('c');
     expect(nativeSnapshotTrackId({ ...snapshot(), trackId: undefined, mediaId: 'hppmusic-1' })).toBe('');
+  });
+});
+
+describe('高频 seek 合并', () => {
+  it('300ms 内多次 seek 只下发最后一次，中间的直接丢弃', async () => {
+    vi.stubGlobal('window', { setTimeout, clearTimeout });
+    const f = fixture();
+    // seek 会被 clamp 到总时长内，先给一个有效时长
+    f.state.duration = 300;
+    f.engine.seek.mockResolvedValue(undefined);
+    const clock = vi.spyOn(Date, 'now');
+    clock.mockReturnValue(1_000);
+    const first = f.manager.seek(10);
+    clock.mockReturnValue(1_050);
+    void f.manager.seek(20);
+    clock.mockReturnValue(1_100);
+    void f.manager.seek(30);
+    await first;
+    expect(f.engine.seek).toHaveBeenCalledTimes(1);
+    expect(f.engine.seek).toHaveBeenLastCalledWith(10);
+    // 窗口结束后只补发最后一次目标
+    await vi.waitFor(() => expect(f.engine.seek).toHaveBeenCalledTimes(2), { timeout: 1500 });
+    expect(f.engine.seek).toHaveBeenLastCalledWith(30);
+    clock.mockRestore();
+    vi.unstubAllGlobals();
   });
 });
