@@ -997,7 +997,9 @@ export const createPlaybackManager = (
       ?? (String(state.currentTrackSnapshot?.id) === trackId ? state.currentTrackSnapshot : null);
     if (!track) return false;
     const changed = trackId !== String(state.currentTrackId ?? '');
+    // 前台回来接管原生快照时也可能换歌：窗口里的 seek 同样不能留。
     if (changed) {
+      clearPendingSeek();
       if (isFm) {
         reportFmAdvance();
         // WebView 冻结期间可能从 A 连续走到 C。把已下发且位于 C 前面的
@@ -1488,6 +1490,9 @@ export const createPlaybackManager = (
       : (playlistStore.activeQueue?.songs ?? playlistStore.defaultList);
     const resolvedId = String(id);
     clearAutoNextTimer();
+    // 切歌优先于任何在途 seek：300ms 合并窗口里的那条必须作废，
+    // 否则它会打到新曲目上（且正好落在 load 窗口，触发 AudioTrack 重建失败）。
+    clearPendingSeek();
     if (!options?.preserveFailureChain) {
       state.autoNextAttempts = 0;
       state.autoNextSourceTrackId = null;
@@ -1941,18 +1946,50 @@ export const createPlaybackManager = (
   let lastSeekAt = 0;
   let pendingSeekTimer: number | null = null;
   let pendingSeekTarget: number | null = null;
+  /** 合并窗口里只能“迟到”一次 seek：必须同时绑定发起时的曲目与请求代号 */
+  let pendingSeekRequestSeq: number | null = null;
+  let pendingSeekTrackId: string | null = null;
+
+  /**
+   * 丢弃挂在窗口里的 seek。
+   *
+   * 切歌/停止/接管原生快照时必须调用：迟到 300ms 的 seek 会落到**新曲目**上，
+   * 而且正好打在 load 窗口里，正是日志里 `AudioTrack init failed` 的来源。
+   */
+  const clearPendingSeek = () => {
+    if (pendingSeekTimer !== null) {
+      window.clearTimeout(pendingSeekTimer);
+      pendingSeekTimer = null;
+    }
+    pendingSeekTarget = null;
+    pendingSeekRequestSeq = null;
+    pendingSeekTrackId = null;
+  };
 
   const seek = (time: number): Promise<void> => {
     if (!Number.isFinite(time)) return Promise.resolve();
     const now = Date.now();
     if (now - lastSeekAt < SEEK_COALESCE_MS) {
       pendingSeekTarget = time;
+      pendingSeekRequestSeq = state.playbackRequestSeq;
+      pendingSeekTrackId = state.currentTrackId;
       if (pendingSeekTimer === null) {
         pendingSeekTimer = window.setTimeout(() => {
           pendingSeekTimer = null;
           const target = pendingSeekTarget;
+          const targetRequestSeq = pendingSeekRequestSeq;
+          const targetTrackId = pendingSeekTrackId;
           pendingSeekTarget = null;
+          pendingSeekRequestSeq = null;
+          pendingSeekTrackId = null;
           if (target === null) return;
+          // 窗口期里用户切了歌 / 换了请求：这条 seek 已经没有意义，直接丢。
+          if (
+            targetRequestSeq !== state.playbackRequestSeq ||
+            targetTrackId !== state.currentTrackId
+          ) {
+            return;
+          }
           lastSeekAt = Date.now();
           void dispatchSeek(target);
         }, SEEK_COALESCE_MS - (now - lastSeekAt));
@@ -2321,6 +2358,7 @@ export const createPlaybackManager = (
     pendingFmLoad = null;
     committedFmOccurrence = null;
     state.playbackEnded = false;
+    clearPendingSeek();
     const sourceQueueId =
       state.currentSourceQueueId ?? playlistStore.activeQueue?.id ?? playlistStore.activeQueueId;
     clearAutoNextTimer();

@@ -270,18 +270,20 @@ public final class EchoPlaybackService extends MediaSessionService {
     private final AudioManager.OnAudioFocusChangeListener focusListener = change -> {
         // listener 用 mainHandler 绑定（见 applyAudioFocusMode），回调已在主线程
         switch (change) {
-            case AudioManager.AUDIOFOCUS_LOSS:
-                if (coPlayWithOthers || !isPlayerPlaying()) return;
+            case AudioManager.AUDIOFOCUS_LOSS: {
                 // LOSS 是**永久**丢失：框架已把本应用移出焦点栈，之后不会再有 GAIN。
-                // 必须主动放弃并清空，否则 applyAudioFocusMode 的 “已在监听” 判断会
-                // 永远挡住重新申请（实测：被抢一次焦点后就再也不会因别的 App 暂停）。
-                abandonAudioFocus(false);
+                // 必须无条件放弃并清空 focusRequest —— 暂停态下如果提前 return，
+                // request 会一直留着重非空，applyAudioFocusMode 的“已在监听”判断会
+                // 永远挡住重新申请（表现：被抢过一次焦点后，别的 App 放歌再也不暂停）。
+                boolean wasPlaying = isPlayerPlaying();
+                abandonAudioFocus(!wasPlaying);
+                if (coPlayWithOthers || !wasPlaying) break;
                 focusLossPaused = true;
-                mainHandler.removeCallbacks(focusLossCheck);
                 focusLossCheckAttempt = 0;
                 focusLossCheckDeadline = SystemClock.uptimeMillis() + FOCUS_LOSS_WINDOW_MS;
                 mainHandler.post(focusLossCheck);
                 break;
+            }
             case AudioManager.AUDIOFOCUS_GAIN:
                 mainHandler.removeCallbacks(focusLossCheck);
                 if (!focusLossPaused || !isPlayerReady()) return;
@@ -521,11 +523,9 @@ public final class EchoPlaybackService extends MediaSessionService {
             public void onPlayerError(PlaybackException error) {
                 String message = error.getMessage();
                 if (message == null || message.isEmpty()) message = "音频播放失败";
+                // failPendingLoad 内部已经遍历 listener 发 onError；这里再发一次会让
+                // 渲染层把同一次失败处理两遍（重复弹提示，甚至连跳两首）。
                 failPendingLoad(message, "media3-playback", "media3");
-                long now = System.currentTimeMillis();
-                for (Listener listener : listeners) {
-                    listener.onError(message, "media3-playback", "media3", now, sourceSeq, generation);
-                }
             }
         });
 
@@ -884,6 +884,10 @@ public final class EchoPlaybackService extends MediaSessionService {
             focusLossPaused = false;
             mainHandler.removeCallbacks(focusLossCheck);
             player.pause();
+            // 暂停就不再占用焦点：继续占着会把别的 App 挤掉，而且一旦被抢走
+            // 就会走 LOSS 分支留下“拿不到焦点”的后遗症。恢复播放时
+            // onIsPlayingChanged(true) → applyAudioFocusMode() 会重新申请。
+            abandonAudioFocus();
             // 暂停后**保持前台**（只刷新通知）：音乐应用里用户随时可能继续播，
             // 退了前台就会被系统回收，通知也被清掉、下次切歌直接崩。
             // 真正的退出前台在 stop() / onDestroy。

@@ -276,12 +276,25 @@ const createPlayer = (): PlayerBridge => {
    */
   let lastFadeVolume = 0;
 
+  /**
+   * 结算在途的淡入 Promise。
+   *
+   * ⚠️ 只 clearInterval 是不够的：`fade()` 里 `await new Promise(...)` 的 resolve
+   * 只会在“步进到终点”时被调用，一旦中途被取消就永远 pending。而
+   * `playWithFade` 是 `await fade(...)` 的，它挂住会让 `engine.play({fadeIn:true})`
+   * 永不落地 —— 表现为 `playbackIntent.phase` 卡在 loading、后续切歌与 seek 全被挡住。
+   */
+  let settleFade: (() => void) | null = null;
+
   const cancelFade = async (): Promise<void> => {
     if (fadeTimer !== null) {
       clearInterval(fadeTimer);
       console.info(`[TransportDiag] fade:cancelled {"atVolume":${lastFadeVolume}}`);
     }
     fadeTimer = null;
+    const settle = settleFade;
+    settleFade = null;
+    settle?.();
   };
 
   const fade = async (from: number, to: number, durationMs: number): Promise<void> => {
@@ -300,6 +313,7 @@ const createPlayer = (): PlayerBridge => {
     let step = 0;
     try {
       await new Promise<void>((resolve, reject) => {
+        settleFade = resolve;
         fadeTimer = setInterval(() => {
           step += 1;
           const ratio = Math.min(1, step / steps);
@@ -313,6 +327,7 @@ const createPlayer = (): PlayerBridge => {
     } finally {
       // 兜底：无论淡入是正常结束还是被中途取消/异常，最终都把音量落到目标值。
       // 不做这件事的话，被取消的淡入会把音量永久留在 0（表现为"在播但没声音"）。
+      settleFade = null;
       lastFadeVolume = target;
       await NativePlayer.setVolume({ volume: target }).catch(() => undefined);
       console.info(`[TransportDiag] fade:settled {"volume":${target}}`);

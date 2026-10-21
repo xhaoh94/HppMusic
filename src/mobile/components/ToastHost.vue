@@ -9,7 +9,7 @@
  * 位置：**屏幕中间偏上**（用户明确要求，原来是贴底部栏）。提示出现在视线
  * 自然停留的位置，不必低头找；同时避开底部栏与页面底部的操作区。
  */
-import { computed } from 'vue';
+import { computed, onUnmounted } from 'vue';
 import { Icon } from '@iconify/vue';
 import { useToastStore } from '@/stores/toast';
 import { iconError, iconInfo, iconSuccess, iconWarning } from '@mobile/icons';
@@ -24,22 +24,38 @@ const toast = useToastStore();
  * 超过 1s 的截到 1s，本来就短的保持不变。
  */
 const MAX_TOAST_MS = 1000;
+/**
+ * 带操作按钮的提示（`showAction`，默认 8 秒）**不能截断** —— 按钮还没看清就消失，
+ * 等于功能失效。只压普通提示。
+ */
+const shouldCap = (action: unknown, presentation?: string) =>
+  !action && (presentation === undefined || presentation === 'auto' || presentation === 'standard');
+
 let toastDurationPatched = false;
+let unpatchToastDuration: (() => void) | null = null;
 const patchToastDuration = () => {
   if (toastDurationPatched) return;
   toastDurationPatched = true;
-  const original = toast.show.bind(toast);
+  const rawShow = toast.show;
   toast.show = ((message, tone = 'info', duration = MAX_TOAST_MS, action, presentation, title) =>
-    original(
+    rawShow.call(
+      toast,
       message,
       tone,
-      Math.min(duration ?? MAX_TOAST_MS, MAX_TOAST_MS),
+      shouldCap(action, presentation) ? Math.min(duration ?? MAX_TOAST_MS, MAX_TOAST_MS) : duration,
       action,
       presentation,
       title,
     )) as typeof toast.show;
+  unpatchToastDuration = () => {
+    toast.show = rawShow;
+    toastDurationPatched = false;
+    unpatchToastDuration = null;
+  };
 };
 patchToastDuration();
+// 宿主卸载（HMR/结构变化）时还原，避免在已包装的函数外面再包一层
+onUnmounted(() => unpatchToastDuration?.());
 
 /**
  * 只渲染**最新一条**：新提示直接顶掉旧的（用户要求，不再堆叠）。

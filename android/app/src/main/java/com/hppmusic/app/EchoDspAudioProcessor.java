@@ -11,6 +11,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Arrays;
 import java.util.concurrent.CompletableFuture;
 
 /**
@@ -112,9 +113,7 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
         if (current == null || current.sampleRate != sampleRate) {
             // 采样率变化（或音效尚未加载）时按当前采样率重载；
             // onReset 不再丢弃音效，所以常见的切歌路径根本走不到这里。
-            effect = requestedPath != null && !requestedPath.trim().isEmpty()
-                    ? Effect.load(requestedPath, sampleRate, requestedMix)
-                    : null;
+            effect = loadEffectForConfigure();
         }
         return inputFormat;
     }
@@ -158,7 +157,11 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
             dspStateDirty = false;
             resetHistory();
             resetFilterState();
-            bassState = new double[2];
+            if (bassState == null || bassState.length != 2) bassState = new double[2];
+            else {
+                bassState[0] = 0.0;
+                bassState[1] = 0.0;
+            }
         }
 
         if (convolutionActive
@@ -304,14 +307,32 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
         historyPosition = 0;
         filterState = null;
         frameScratch = null;
-        bassState = new double[2];
+        if (bassState == null || bassState.length != 2) bassState = new double[2];
+        else Arrays.fill(bassState, 0.0);
         // 均衡器/增益/中置处理是用户设置，不随播放器重置清空
     }
 
+    /**
+     * 清空卷积历史。
+     *
+     * ⚠️ 只在**尺寸变化**时新建数组：`setEqualizer` 每拖一下都会置 dspStateDirty，
+     * 而 history 在卷积音效开启时是 channels×taps（最大 2×4096 ≈ 32KB），
+     * 每次改动都 new 会让音频线程频繁 GC（爆音/underrun）。尺寸没变就 fill 0。
+     */
     private void resetHistory() {
         Effect current = effect;
         int taps = current == null ? 1 : Math.max(1, current.taps.length);
-        history = new float[Math.max(1, channels)][taps];
+        int channelCount = Math.max(1, channels);
+        float[][] existing = history;
+        if (existing == null || existing.length != channelCount
+                || existing[0] == null || existing[0].length != taps) {
+            existing = new float[channelCount][taps];
+            history = existing;
+        } else {
+            for (float[] row : existing) {
+                if (row != null) Arrays.fill(row, 0f);
+            }
+        }
         historyPosition = 0;
     }
 
@@ -323,7 +344,41 @@ public final class EchoDspAudioProcessor extends BaseAudioProcessor {
     }
 
     private void resetFilterState() {
-        filterState = new double[Math.max(1, channels)][BAND_COUNT][2];
+        int channelCount = Math.max(1, channels);
+        double[][][] existing = filterState;
+        if (existing == null || existing.length != channelCount
+                || existing[0] == null || existing[0].length != BAND_COUNT
+                || existing[0][0] == null || existing[0][0].length != 2) {
+            filterState = new double[channelCount][BAND_COUNT][2];
+            return;
+        }
+        for (double[][] bands : existing) {
+            if (bands == null) continue;
+            for (double[] pair : bands) {
+                if (pair != null) Arrays.fill(pair, 0.0);
+            }
+        }
+    }
+
+    /**
+     * 按当前采样率加载卷积音效。
+     *
+     * ⚠️ 这里跑在播放线程上（onConfigure），**必须**自己兜住异常：IRS 文件被
+     * `deleteAudioResource` 删掉、缓存被系统清理、下载中断留下半截文件，都会让
+     * `Effect.load` 抛 IllegalArgumentException。异常一旦逃出 onConfigure，
+     * 播放器直接进 onPlayerError —— 而且 `requestedPath` 还留着，于是**每首歌**
+     * 起播都失败一次，用户只能手动关音效才能恢复。
+     */
+    private Effect loadEffectForConfigure() {
+        String path = requestedPath;
+        if (path == null || path.trim().isEmpty()) return null;
+        try {
+            return Effect.load(path, sampleRate, requestedMix);
+        } catch (Throwable error) {
+            Log.w("EchoDsp", "音效加载失败，本次降级为原声: " + path, error);
+            requestedPath = null;
+            return null;
+        }
     }
 
     private void rebuildBiquads() {

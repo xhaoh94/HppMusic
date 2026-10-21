@@ -569,24 +569,27 @@ export const useSmoothPosition = () => {
   let frame = 0;
   let sampledPosition = 0;
   let sampledAt = 0;
+  /** 上一帧的推进状态：暂停→恢复时必须重置采样时间，否则会把整段暂停时长算进外推 */
+  let wasAdvancing = false;
 
   const step = () => {
     const clock = player.playbackClock;
     const raw = Number(clock?.positionMs ?? 0);
     const now = performance.now();
+    const advancing = Boolean(clock?.isAdvancing);
 
-    if (raw !== sampledPosition) {
+    if (raw !== sampledPosition || advancing !== wasAdvancing) {
+      // 推进状态一变（暂停/缓冲→播放）就把“这个采样值是什么时候拿到的”重定到当下：
+      // 暂停期间原生不再上报，sampledAt 会停在暂停前，恢复时进度条会一次跳过整段暂停时长。
       sampledPosition = raw;
       sampledAt = now;
+      wasAdvancing = advancing;
     }
 
     const rate = Number(clock?.playbackRate ?? 1) || 1;
-    const projected = clock?.isAdvancing
-      ? sampledPosition + (now - sampledAt) * rate
-      : sampledPosition;
-
+    const projected = advancing ? sampledPosition + (now - sampledAt) * rate : sampledPosition;
     const durationMs = Number(clock?.durationMs ?? 0);
-    positionMs.value = durationMs > 0 ? Math.min(projected, durationMs) : projected;
+    positionMs.value = durationMs > 0 ? Math.min(projected, durationMs) : Math.max(0, projected);
 
     frame = window.requestAnimationFrame(step);
   };
@@ -595,6 +598,7 @@ export const useSmoothPosition = () => {
     if (frame) return;
     sampledPosition = 0;
     sampledAt = performance.now();
+    wasAdvancing = false;
     frame = window.requestAnimationFrame(step);
   };
 

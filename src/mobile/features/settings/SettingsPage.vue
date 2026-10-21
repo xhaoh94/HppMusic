@@ -367,12 +367,14 @@ onMounted(async () => {
 .settings-body {
   flex: 1;
   min-height: 0;
-  padding-bottom: var(--sp-8);
+  /* 横向留白归页面管：分组的卡片要在屏幕内缩一圈，分组标签再比卡片多缩一点 */
+  padding: var(--sp-2) var(--sp-4) var(--sp-8);
 }
 
+/* 与分组标签左对齐（标签比屏幕多缩 --sp-1），不当"孤儿段落" */
 .legal {
-  margin: var(--sp-4) 0 0;
-  padding: 0 var(--sp-4);
+  margin: var(--sp-1) 0 0;
+  padding: 0 var(--sp-5);
   font-size: var(--font-xs);
   line-height: 1.7;
   color: var(--text-tertiary);

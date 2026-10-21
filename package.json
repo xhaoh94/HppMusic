@@ -1,7 +1,7 @@
 {
   "name": "hppmusic",
   "private": true,
-  "version": "0.1.2",
+  "version": "0.1.3",
   "type": "module",
   "description": "HppMusic —— 安卓端音乐客户端（Capacitor + Vue 3）。UI 层全新自研，业务内核 vendor 自 EchoMusic。",
   "license": "GPL-3.0-only",

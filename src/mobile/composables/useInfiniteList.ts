@@ -121,13 +121,14 @@ export const useInfiniteList = <T>(
     return run(page.value + 1, 'append');
   };
 
-  /** 失败后继续加载下一页（保留已加载内容） */
+  /** 失败后继续加载（已加载内容保留；首屏失败则从第一页重来） */
   const retry = () => {
-    if (error.value) {
-      error.value = '';
-      return run(page.value + 1, 'append');
-    }
-    return reload();
+    if (!error.value) return reload();
+    error.value = '';
+    // ⚠️ 首屏失败时 page 还是 0：必须走 replace。走 append 只会置 isLoadingMore，
+    // 而 isEmpty 只看 isLoading / error，重试请求期间会瞬间变成 true ——
+    // 界面从“加载失败”闪成“还没有内容”，用户以为数据被清了。
+    return page.value === 0 ? run(1, 'replace') : run(page.value + 1, 'append');
   };
 
   /**

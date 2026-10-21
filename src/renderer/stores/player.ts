@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia';
-import { computed, onScopeDispose, reactive, toRefs, watch } from 'vue';
+import { computed, getCurrentScope, onScopeDispose, reactive, toRefs, watch } from 'vue';
 import { DISCOVER_QUEUE_ID, PERSONAL_FM_QUEUE_ID, usePlaylistStore } from './playlist';
 import { useLyricStore } from './lyric';
 import { useSettingStore } from './setting';
@@ -73,6 +73,9 @@ import {
 export const usePlayerStore = defineStore(
   'player',
   () => {
+    // store 建立时的 effect scope：`init()` 是 async 的，里面 await 之后
+    // 已经没有活动 scope，那里的 onScopeDispose 会被直接丢弃（详见 init 末尾）。
+    const setupScope = getCurrentScope();
     const engine = new PlayerEngine();
     const state = reactive(createPlayerState());
     const playlistStore = usePlaylistStore();
@@ -503,13 +506,20 @@ export const usePlayerStore = defineStore(
 
         let resumed = seamless || !wasPlaying;
         if (!seamless && wasPlaying) {
-          try {
-            await engine.play();
-            if (requestSeq !== state.playbackRequestSeq) return;
-            resumed = true;
-          } catch (error) {
-            logger.error('PlayerStore', 'Reload track failed:', error);
+          // 与 playTrack 同一条判据：刷新音源（换音质）会 await 一段时间，
+          // 期间用户可能已经按了暂停 —— 那就不要再出声，也不要把 UI 翻回“播放中”。
+          if (!state.playbackIntent.shouldPlay) {
             resumed = false;
+          } else {
+            try {
+              await engine.play();
+              if (requestSeq !== state.playbackRequestSeq) return;
+              resumed = state.playbackIntent.shouldPlay;
+              if (!resumed) engine.pause();
+            } catch (error) {
+              logger.error('PlayerStore', 'Reload track failed:', error);
+              resumed = false;
+            }
           }
         }
         if (requestSeq !== state.playbackRequestSeq) return;
@@ -1413,11 +1423,14 @@ export const usePlayerStore = defineStore(
       document.addEventListener('visibilitychange', reconcileOnResume);
       window.addEventListener('pageshow', reconcileOnResume);
       window.addEventListener('focus', reconcileOnResume);
-      onScopeDispose(() => {
+      // ⚠️ 这里已经过了 await，没有活动 scope：直接 onScopeDispose 只会打警告并
+      // **丢弃回调**（监听器永远不清理）。用 store 建立时捕获的 scope 注册。
+      const disposeResumeListeners = () => {
         document.removeEventListener('visibilitychange', reconcileOnResume);
         window.removeEventListener('pageshow', reconcileOnResume);
         window.removeEventListener('focus', reconcileOnResume);
-      });
+      };
+      setupScope?.run(() => onScopeDispose(disposeResumeListeners));
 
       const events: PlayerEngineEvents = {
         timeUpdate: (currentTime, payload) => {
