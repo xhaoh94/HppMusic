@@ -1065,7 +1065,13 @@ public final class EchoPlaybackService extends MediaSessionService {
 
     private void applyBackgroundPlaybackMode() {
         player.setShuffleModeEnabled(backgroundRepeatMode == 3);
-        boolean canRepeatList = backgroundExpectedCount == 1 || player.getMediaItemCount() > 1;
+        // 只有后台队列已就绪时才允许原生列表循环。刚 load 完、队列还没预置好时
+        // 播放列表里只有当前这一首，此时 REPEAT_MODE_ALL 会让 ExoPlayer 无限重播它
+        // 且永远不进 STATE_ENDED —— 渲染层收不到结束事件就不会切歌，表现为
+        // "随机/列表循环播完不切歌、循环当前歌"（息屏、连车机时后台队列预置不上，必现）。
+        // ⚠️ 不能用 backgroundExpectedCount == 1 判"单曲歌单"：resetBackgroundQueueState()
+        // 也把它置 1，"未预置"和"单曲歌单"会无法区分。
+        boolean canRepeatList = backgroundPlaylistActive;
         player.setRepeatMode(backgroundRepeatMode == 1 ? Player.REPEAT_MODE_ONE
                 : backgroundRepeatMode >= 2 && canRepeatList ? Player.REPEAT_MODE_ALL : Player.REPEAT_MODE_OFF);
     }
