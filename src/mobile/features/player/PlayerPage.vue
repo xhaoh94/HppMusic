@@ -32,11 +32,15 @@
  * 切入口两处：**点封面区域循环切换** + 「更多 → 换肤」明确列出（对齐旧项目的菜单）。
  * 模式记在 `settingStore.lyricViewMode`，播放页与菜单读同一份，不会两处不一致。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { Icon } from '@iconify/vue';
 import Slider from '@mobile/components/Slider.vue';
 import Sheet from '@mobile/components/Sheet.vue';
+import SongRow from '@mobile/components/SongRow.vue';
+import LocateCurrentButton from '@mobile/components/LocateCurrentButton.vue';
+import { songKeyOf } from '@mobile/utils/songKey';
+import type { Song } from '@/models/song';
 import CoverPanel from './CoverPanel.vue';
 import LyricsPanel from './LyricsPanel.vue';
 import QualitySheet from './QualitySheet.vue';
@@ -224,16 +228,62 @@ const onToggleFavorite = async () => {
 /* ── 队列 ── */
 const queueSongs = computed(() => activeQueue.value?.songs ?? []);
 const queueTitle = computed(() => activeQueue.value?.title || '播放队列');
-const currentQueueIndex = computed(() => {
-  const id = String(track.value?.id ?? '');
-  if (!id) return -1;
-  return queueSongs.value.findIndex((song) => String(song.id) === id);
-});
+/** 与 SongRow 写到 DOM 上的 `data-song-key` 同一套取值规则，靠它给当前曲目上高亮 */
+const currentSongKey = computed(() => songKeyOf(track.value));
+const queueListEl = ref<HTMLElement | null>(null);
+/**
+ * 抽屉里定位按钮距屏幕底部的偏移。
+ *
+ * `LocateCurrentButton` 是 `position: absolute`，它的定位基准会一路找到
+ * `position: fixed` 的抽屉遮罩 —— 也就是相对**屏幕**定位，而不是相对抽屉面板。
+ * 抽屉贴着屏幕底，但内容区有 `--safe-bottom` 的安全区留白，不加回来按钮会
+ * 被手势条压住。
+ */
+const locateButtonBottom = 'calc(var(--safe-bottom) + var(--sp-3))';
 
 const jumpTo = async (songId: string) => {
   await playFromActiveQueue(songId);
   queueOpen.value = false;
 };
+
+const onSelectQueueSong = (song: Song) => {
+  void jumpTo(String(song.id));
+};
+
+/** 在队列里找"正在播放"的那一行；当前曲不在这个队列里时返回 null */
+const findCurrentQueueRow = (): HTMLElement | null => {
+  const key = currentSongKey.value;
+  if (!key) return null;
+  const row = queueListEl.value?.querySelector(`[data-song-key="${CSS.escape(key)}"]`);
+  return row instanceof HTMLElement ? row : null;
+};
+
+/**
+ * 打开队列时把正在播放的那一首滚到视口中间。
+ *
+ * · 用 `data-song-key` 找行，不按 `index × 固定行高` 算：行高会被音质标签、
+ *   有无序号这些内容撑变，算出来必然越往下偏得越多。
+ * · 在进场动画开始前就滚好。`getBoundingClientRect` 拿的是变换后的可视矩形，
+ *   此时面板和行被 translateY 平移了同样的距离，两者差值不受影响；
+ *   等动画结束再滚，用户会先看到列表顶部再被一把拽走，反而更突兀。
+ * · 用矩形差而不是 `offsetTop`：`.sheet-body` 和 `.sheet-panel` 都不是定位元素，
+ *   `offsetTop` 会一路算到 `position: fixed` 的遮罩上，把标题栏高度也算进去。
+ * · 滚走之后的一键拉回由 `LocateCurrentButton` 负责（平滑滚动），这里是打开时的定位。
+ */
+const locateCurrentInQueue = () => {
+  // 队列列表的直接父节点就是 Sheet 的滚动容器（.sheet-body）
+  const container = queueListEl.value?.parentElement;
+  const row = findCurrentQueueRow();
+  if (!container || !row) return;
+  const rowRect = row.getBoundingClientRect();
+  const boxRect = container.getBoundingClientRect();
+  container.scrollTop += rowRect.top - boxRect.top - (boxRect.height - rowRect.height) / 2;
+};
+
+watch(queueOpen, (open) => {
+  if (!open) return;
+  void nextTick(() => window.requestAnimationFrame(locateCurrentInQueue));
+});
 
 const goBack = () => {
   // 与系统返回键同一套语义（含「自动改道来的播放页回到本来要去的列表」）
@@ -434,23 +484,19 @@ onBeforeUnmount(() => {
 
   <Sheet v-model="queueOpen" :title="queueTitle">
     <p v-if="!queueSongs.length" class="queue-empty">队列是空的，去首页挑一首吧</p>
-    <button
-      v-for="(song, index) in queueSongs"
-      :key="`${song.id}-${index}`"
-      type="button"
-      class="queue-item"
-      :class="{ 'is-current': index === currentQueueIndex }"
-      @click="jumpTo(String(song.id))"
-    >
-      <span class="queue-index" aria-hidden="true">
-        <template v-if="index === currentQueueIndex && isPlaying">▶</template>
-        <template v-else>{{ index + 1 }}</template>
-      </span>
-      <span class="queue-meta">
-        <span class="queue-title ellipsis">{{ song.title || song.name }}</span>
-        <span class="queue-artist ellipsis">{{ song.artist }}</span>
-      </span>
-    </button>
+    <div v-else ref="queueListEl" class="queue-list">
+      <SongRow
+        v-for="(song, index) in queueSongs"
+        :key="`${song.id}-${index}`"
+        :song="song"
+        :active="songKeyOf(song) === currentSongKey"
+        show-index
+        :index="index"
+        @select="onSelectQueueSong"
+      />
+    </div>
+    <!-- 和外面歌单同一个组件：右下角悬浮，滚走之后一键拉回当前曲目 -->
+    <LocateCurrentButton v-if="queueSongs.length" :songs="queueSongs" :bottom="locateButtonBottom" />
   </Sheet>
 </template>
 
@@ -832,47 +878,17 @@ onBeforeUnmount(() => {
   color: var(--text-secondary);
 }
 
-.queue-item {
-  display: flex;
-  align-items: center;
-  gap: var(--sp-3);
-  width: 100%;
-  min-height: 52px;
-  padding: 0 var(--sp-1);
-  border-radius: var(--radius-sm);
-  text-align: left;
+/*
+ * 行复用外面的歌曲行，但它自带左右 16px 内边距 —— 抽屉内容区本身已有 20px。
+ * 这里用负边距把列表拉满，再把行的内边距改成 20px：
+ * 高亮底色铺到抽屉边缘，序号/封面又与标题左对齐。
+ */
+.queue-list {
+  margin: 0 calc(var(--sp-5) * -1);
 }
 
-.queue-item:active {
-  background: var(--fill-subtle);
-}
-
-.queue-index {
-  flex: 0 0 22px;
-  text-align: center;
-  font-size: var(--font-sm);
-  color: var(--text-tertiary);
-  font-variant-numeric: tabular-nums;
-}
-
-.queue-item.is-current .queue-index,
-.queue-item.is-current .queue-title {
-  color: var(--accent);
-}
-
-.queue-meta {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.queue-title {
-  font-size: var(--font-md);
-}
-
-.queue-artist {
-  font-size: var(--font-xs);
-  color: var(--text-secondary);
+.queue-list :deep(.song-row) {
+  padding-left: var(--sp-5);
+  padding-right: var(--sp-5);
 }
 </style>

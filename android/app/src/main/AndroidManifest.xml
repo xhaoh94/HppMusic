@@ -39,10 +39,19 @@
             </intent-filter>
         </receiver>
 
-        <!-- 后台播放：MediaSessionService，通知栏与锁屏控制由它提供 -->
+        <!--
+          后台播放：MediaSessionService，通知栏与锁屏控制由它提供。
+
+          stopWithTask="true"：从最近任务里划掉 App 就当作"退出"，停播放并撤通知。
+          不写的话默认 false，而 MediaSessionService.onTaskRemoved 只有在
+          「没在播」时才停 service —— 也就是"正在放歌时划掉照样放"，
+          且各家 ROM 对划掉的处理还不一致（有的直接强杀进程）。
+          本项目按"划掉 = 关 App"处理，显式声明，不受 ROM 差异影响。
+        -->
         <service
             android:name=".EchoPlaybackService"
             android:exported="false"
+            android:stopWithTask="true"
             android:foregroundServiceType="mediaPlayback" />
 
         <activity

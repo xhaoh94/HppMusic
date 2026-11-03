@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createNativePlaybackReconciler, nativeSnapshotTrackId } from '../src/shared/nativePlaybackSnapshot';
 
-vi.mock('@/utils/logger', () => ({ default: { info: vi.fn(), warn: vi.fn() } }));
+vi.mock('@/utils/logger', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock('@/utils/player', () => ({ normalizePlayerErrorPayload: vi.fn() }));
 vi.mock('@/utils/song', () => ({ isPlayableSong: () => true }));
 vi.mock('../src/renderer/stores/playlist', () => ({ DISCOVER_QUEUE_ID: 'discover', PERSONAL_FM_QUEUE_ID: 'fm' }));
@@ -40,16 +40,18 @@ function fixture() {
   const engine = {
     adoptNativePlaybackSnapshot: vi.fn(), beginSourceChange: vi.fn(), setSource: vi.fn(),
     play: vi.fn(), pause: vi.fn(), setLoopFile: vi.fn(),
+    setPlaybackRate: vi.fn(), applyTrackLoudness: vi.fn(), adoptPreparedTrackLoudness: vi.fn(),
     updateMediaMetadata: vi.fn(), clearBackgroundQueue: vi.fn(),
     clearPreparedNextSource: vi.fn(), updateMediaPlaybackState: vi.fn(),
-    seek: vi.fn(async () => undefined),
+    seek: vi.fn(async () => undefined), reset: vi.fn(),
     supportsNativePlaybackQueue: vi.fn(() => true), getNativeQueueGeneration: vi.fn(async () => 2),
     setBackgroundRepeatMode: vi.fn(), setBackgroundNextSource: vi.fn(), skipNativeQueueTrack: vi.fn(async () => true),
     finishNativeQueuePreparation: vi.fn(),
   };
   const playlist = {
     playbackQueues: [{ id: 'queue', songs }], updateQueueCurrentTrack: vi.fn(),
-    consumeQueuedNextTrackId: vi.fn(), syncQueuedNextTrackIds: vi.fn(),
+    consumeQueuedNextTrackId: vi.fn(), consumeQueuedNextTrackIds: vi.fn(),
+    syncQueuedNextTrackIds: vi.fn(),
   };
   const lyrics = { clear: vi.fn(), setLyric: vi.fn(), fetchLyrics: vi.fn() };
   const resolver = { resolveAudioUrl: vi.fn() };
@@ -151,6 +153,11 @@ describe('原生队列的播放模式', () => {
     expect(nativeQueueMode(mode)).toBe(expected);
     const f = fixture();
     f.state.playMode = mode;
+    // 随机模式的候选顺序来自 shuffleQueue，显式给一份固定顺序，避免测试依赖 Math.random
+    if (mode === 'random') {
+      f.state.shuffleQueue = [1, 2];
+      f.state.shuffleQueueLength = 3;
+    }
     f.resolver.resolveAudioUrl.mockImplementation(async (track: { id: string }) => ({ url: `https://audio/${track.id}` }));
     await f.manager.prepareBackgroundNext();
     expect(f.engine.setBackgroundRepeatMode).toHaveBeenCalledWith(expected);
@@ -160,6 +167,33 @@ describe('原生队列的播放模式', () => {
     expect(entries.every(entry => entry.currentQueueIndex === 0 && entry.generation === 2)).toBe(true);
     expect(f.engine.setSource).not.toHaveBeenCalled();
     expect(f.engine.play).not.toHaveBeenCalled();
+  });
+
+  it('随机模式按整列表的乱序取候选，而不是"当前项之后的连续 N 首"', async () => {
+    const f = fixture();
+    const list = f.state.currentPlaylist!;
+    // 补到 20 首，模拟"我喜欢"这种长列表
+    for (let index = list.length; index < 20; index += 1) {
+      list.push({ ...list[0], id: `s${index}`, hash: `s${index}`, mixSongId: `s${index}` });
+    }
+    f.state.playMode = 'random';
+    f.state.currentTrackId = 'a';
+    // 一整轮乱序里最后 4 首（索引 16..19）—— 按列表顺序永远排在第 15 位之后，
+    // 原生窗口只有 15 首，取"连续候选"的话它们永远进不了窗口。
+    f.state.shuffleQueue = [16, 17, 18, 19];
+    f.state.shuffleQueueLength = list.length;
+    f.resolver.resolveAudioUrl.mockImplementation(async (track: { id: string }) => ({ url: `https://audio/${track.id}` }));
+    await f.manager.prepareBackgroundNext();
+    const trackIds = f.engine.setBackgroundNextSource.mock.calls.map(([entry]) => entry.trackId);
+    expect(trackIds.length).toBeGreaterThan(0);
+    // 索引 16~19 在列表顺序里排在最后，取"连续候选"永远轮不到它们
+    expect(trackIds[0]).toBe('s16');
+    expect(trackIds).not.toContain('s1');
+  });
+
+  it('同样的队列用连续候选会漏掉列表后段（对照）', () => {
+    // 原生窗口只有少数几首时，从索引 0 开始按列表顺序取只能覆盖 1..N
+    expect(nativeQueueCandidateIndices(20, 0).slice(0, 2)).toEqual([1, 2]);
   });
 
   it('从列表中间开始仍传真实索引，优先准备后续，再补前半列表', () => {
@@ -192,14 +226,56 @@ describe('原生队列的播放模式', () => {
     expect(f.resolver.resolveAudioUrl).toHaveBeenCalledTimes(2);
   });
 
-  it('前台上下首使用原生队列，不再重新 load/play', async () => {
+  it('手动上下首走渲染层决策，不再在原生小窗口里 seek', async () => {
     const f = fixture();
+    f.resolver.resolveAudioUrl.mockImplementation(async (track: { id: string }) => ({ url: `https://audio/${track.id}` }));
     await f.manager.next();
+    expect(f.engine.skipNativeQueueTrack).not.toHaveBeenCalled();
+    expect(f.engine.setSource).toHaveBeenCalled();
+    expect(f.engine.play).toHaveBeenCalled();
     await f.manager.prev();
-    expect(f.engine.skipNativeQueueTrack.mock.calls).toEqual([[1], [-1]]);
-    expect(f.engine.setSource).not.toHaveBeenCalled();
-    expect(f.engine.play).not.toHaveBeenCalled();
-    expect(f.resolver.resolveAudioUrl).not.toHaveBeenCalled();
+    expect(f.engine.skipNativeQueueTrack).not.toHaveBeenCalled();
+  });
+
+  it('随机模式手动下一首按整列表乱序推进，不再在原生窗口里挑', async () => {
+    const f = fixture();
+    const list = f.state.currentPlaylist!;
+    for (let index = list.length; index < 20; index += 1) {
+      list.push({ ...list[0], id: `s${index}`, hash: `s${index}`, mixSongId: `s${index}` });
+    }
+    f.state.playMode = 'random';
+    f.resolver.resolveAudioUrl.mockImplementation(async (track: { id: string }) => ({ url: `https://audio/${track.id}` }));
+
+    // 首次调用会重置并重建乱序轮次（进入随机模式的既定行为），先跑一次让队列就位
+    await f.manager.next();
+    expect(f.engine.skipNativeQueueTrack).not.toHaveBeenCalled();
+    const front = f.state.shuffleQueue![0];
+    const expectedId = String(list[front]!.id);
+
+    await f.manager.next();
+
+    // 落点 = 乱序队列的队首（来自整列表，不是当前曲附近的连续几首）
+    expect(String(f.state.currentTrackId)).toBe(expectedId);
+    // 队首已消费
+    expect(f.state.shuffleQueue![0]).not.toBe(front);
+  });
+
+  it('原生切歌后重建一轮队列，窗口随当前项前移；同曲恢复不清队列', async () => {
+    const f = fixture();
+    f.resolver.resolveAudioUrl.mockImplementation(async (track: { id: string }) => ({ url: `https://audio/${track.id}` }));
+    await f.manager.prepareBackgroundNext();
+    expect(f.engine.clearBackgroundQueue).toHaveBeenCalledTimes(1);
+
+    // 同一首的快照（息屏回来 / 多次 tick）不能再清一次队列
+    f.manager.adoptNativePlaybackSnapshot(snapshot('a'));
+    await f.manager.prepareBackgroundNext();
+    expect(f.engine.clearBackgroundQueue).toHaveBeenCalledTimes(1);
+
+    // 原生真的切到下一首：窗口必须重建，否则它会在旧的 15 首里被
+    // REPEAT_MODE_ALL 永远循环（用户报的"随机只在十几首里打转"）
+    f.manager.adoptNativePlaybackSnapshot(snapshot('c'));
+    await f.manager.prepareBackgroundNext();
+    expect(f.engine.clearBackgroundQueue).toHaveBeenCalledTimes(2);
   });
 
   it('取链全失败后退避重试，不永久锁死，也不每个进度事件重复请求', async () => {

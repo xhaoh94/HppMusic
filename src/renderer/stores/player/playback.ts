@@ -64,14 +64,22 @@ import {
 /** Fallback prefetch window when the transition settings are unavailable. */
 const GAPLESS_PREFETCH_WINDOW_SECS = 30;
 /**
- * 原生后台队列一次最多准备多少首。
+ * 原生后台队列一次最多准备多少首（不含当前曲）。
  *
- * ⚠️ 不能一次把整张歌单全取一遍：每一首都是一次（甚至两次）网络取链，
- * 60 首歌单就是上百个串行请求，既会拖慢/顶掉当前播放的取链（resolver 的
- * 音质授权序号是全局的，被后面的请求顶掉就返回空地址），也浪费流量。
- * 15 首 ≈ 40~60 分钟后台播放，足够覆盖用户真实的后台听歌场景。
+ * ⚠️ 不要一次把整张歌单全取一遍：每首都是一到两次网络取链，60 首就是上百个
+ * 串行请求 —— 既拖慢当前播放（resolver 的音质授权序号是全局的，被后面的请求
+ * 顶掉就返回空地址），也纯属浪费。
+ *
+ * 这个数字**不是"随机能覆盖多少首"的上限**：窗口每首歌都会按整列表的乱序重建，
+ * 它只决定"一次提前解析几个地址"，作用两条：
+ * 1. 无缝换曲 —— EOF 时下一首地址已经在原生手里，不用等网络往返（否则每首歌
+ *    交界都有 1~2 秒空档，车上特别明显）；
+ * 2. 容忍一次重建失败 —— 网络抖一下还有缓冲，不至于立刻回退成循环当前窗口。
+ *
+ * 3 首（原生里共 4 项）：当前曲播完还有两层缓冲，够覆盖一次失败重试；再大只是
+ * 白花取链次数。
  */
-const BACKGROUND_QUEUE_AHEAD = 15;
+const BACKGROUND_QUEUE_AHEAD = 3;
 const GAPLESS_SEEK_REGISTRATION_WINDOW_SECS = 2;
 
 type GaplessPreparedSource = {
@@ -973,6 +981,8 @@ export const createPlaybackManager = (
    * “以原生 URL 为准”，不影响播放）。
    */
   const backgroundResolvedSources = new Map<string, ResolvedAudioSource>();
+  /** 同一份解析结果按曲目 ID 再索引一份：手动切歌直接当 preResolved 用，省一次取链。 */
+  const backgroundResolvedByTrack = new Map<string, ResolvedAudioSource>();
   const BACKGROUND_SOURCE_CACHE_MAX = 120;
   let backgroundFmRequestSeq = -1;
   let backgroundFmEpoch = -1;
@@ -1075,8 +1085,11 @@ export const createPlaybackManager = (
     completePlaybackIntent(state, state.playbackRequestSeq, { isPlaying: Boolean(shouldPlay) });
     setEnginePlaybackStatus(state, native.playing ? 'playing' : native.ended ? 'stopped' : 'paused', trackId);
     engine.adoptNativePlaybackSnapshot(native.path, native.timePos, state.duration, native.sampledAt);
-    // 保留原生队列，不要因恢复后 timeUpdate 再触发清队列/取链。
-    backgroundQueuePreparedRequestSeq = state.playbackRequestSeq;
+    // 同一个 playbackRequestSeq 内不要因恢复后的 timeUpdate 再清一次队列；但原生真的
+    // 切了歌必须**显式作废**这个标记（置 -1 而不是不动它 —— 标记是序号，留着旧值
+    // 照样命中"已准备"判断），让下一轮 prepareBackgroundNext 重建窗口。否则那个窗口
+    // （当前 + 15 首）会被 REPEAT_MODE_ALL 永远循环，表现为"随机只在十几首里打转"。
+    backgroundQueuePreparedRequestSeq = changed ? -1 : state.playbackRequestSeq;
     if (isFm && changed) {
       // 原生播放到 buffer 里的曲目时才提交FM消费；补推荐不重开当前音源。
       void playlistStore.replenishPersonalFmBuffer().then(() => prepareBackgroundNext())
@@ -1113,8 +1126,26 @@ export const createPlaybackManager = (
     const isCurrent = () => requestSeq === state.playbackRequestSeq && (!isFm || fmEpoch === playlistStore.personalFmSessionEpoch);
     const reuseFmQueue = isFm && backgroundFmRequestSeq === requestSeq && backgroundFmEpoch === fmEpoch;
     const seen = new Set(reuseFmQueue ? [...backgroundFmTracks, currentTrackId] : [currentTrackId]);
-    const candidates = nativeQueueCandidateIndices(list.length, currentIndex).filter((index) => {
-      const track = list[index]!;
+    /**
+     * 候选顺序。
+     *
+     * 随机模式必须从**随机队列**取，不能用"当前项之后的连续 N 首"：
+     * 原生只在它自己那 N 首里按 REPEAT_MODE_ALL 兜圈子，玩家听下来就是
+     * "随机只在这十几首里切"。这里把 shuffleQueue（整个列表的一轮乱序）
+     * 排在前面，不够再用列表顺序补齐。
+     */
+    if (!isFm && state.playMode === 'random') ensureShuffleQueue(list.length, currentIndex);
+    // ⚠️ shuffleQueue 是上一轮队列的索引，换歌单后要等 resolvePlaybackNextTrack 才重置；
+    // 这里先按当前列表长度过滤，避免拿到越界索引（list[index] 为 undefined）。
+    const shuffleCandidates = !isFm && state.playMode === 'random'
+      ? (state.shuffleQueue ?? []).filter((index) => index >= 0 && index < list.length)
+      : [];
+    const candidateOrder = shuffleCandidates.length
+      ? [...shuffleCandidates, ...nativeQueueCandidateIndices(list.length, currentIndex)]
+      : nativeQueueCandidateIndices(list.length, currentIndex);
+    const candidates = candidateOrder.filter((index) => {
+      const track = list[index];
+      if (!track) return false;
       if ((isFm && index <= currentIndex) || seen.has(String(track.id)) || !isPlayableSong(track)) return false;
       seen.add(String(track.id));
       return true;
@@ -1128,6 +1159,7 @@ export const createPlaybackManager = (
         await engine.clearBackgroundQueue(candidates.length + 1);
         if (!isCurrent()) return;
         backgroundResolvedSources.clear();
+        backgroundResolvedByTrack.clear();
         backgroundFmTracks.clear();
         if (isFm) {
           backgroundFmRequestSeq = requestSeq;
@@ -1146,8 +1178,10 @@ export const createPlaybackManager = (
           if (!isCurrent()) return;
           if (!resolved?.url) continue;
           backgroundResolvedSources.set(resolved.url, resolved);
+          backgroundResolvedByTrack.set(String(track.id), resolved);
           if (backgroundResolvedSources.size > BACKGROUND_SOURCE_CACHE_MAX) {
             backgroundResolvedSources.clear();
+            backgroundResolvedByTrack.clear();
           }
           await engine.setBackgroundNextSource({
             url: resolved.url, trackId: String(track.id),
@@ -2234,11 +2268,11 @@ export const createPlaybackManager = (
     gaplessTransition?: boolean;
     preserveFailureChain?: boolean;
   }) => {
-    if (
-      !options?.automatic && !options?.gaplessTransition &&
-      getPlaybackSourceQueueId() !== PERSONAL_FM_QUEUE_ID &&
-      engine.supportsNativePlaybackQueue() && await engine.skipNativeQueueTrack(1)
-    ) return;
+    // 手动上下首**不走原生队列**：原生窗口只有 BACKGROUND_QUEUE_AHEAD 首，
+    // 在里面 seek 等于"只在候选池里打转"—— 深度改成 3 之后用户实测"手动切歌
+    // 只有 4 首循环"。下一首交给渲染层按整列表语义决定，地址能从
+    // backgroundResolvedByTrack 命中就不重新取链，所以并没有变慢多少。
+    // 原生队列只负责自动推进（EOF 无缝换曲）。
     const { sourceQueueId, sourceQueue, list } = getPlaybackSourceContext();
     if (sourceQueueId === PERSONAL_FM_QUEUE_ID) {
       await advancePersonalFm(options?.gaplessTransition === true);
@@ -2297,22 +2331,31 @@ export const createPlaybackManager = (
       decision.queuedNextTrackIdsToConsume,
       decision.sourceQueueId ?? undefined,
     );
+    const preResolved = prepared?.resolved ?? backgroundResolvedByTrack.get(decision.targetTrackId);
     await playTrack(decision.targetTrackId, decision.list, {
       sourceQueueId: decision.sourceQueueId,
-      preResolved: prepared?.resolved,
+      preResolved,
+      // 窗口地址可能已经放了很久，失效就退回完整取链，不能直接报播放失败
+      fallbackOnPreResolvedFailure: Boolean(preResolved),
       preserveFailureChain: options?.preserveFailureChain,
     });
   };
 
   const prev = async () => {
-    if (engine.supportsNativePlaybackQueue() && await engine.skipNativeQueueTrack(-1)) return;
+    // 手动上一首同样不走原生队列，理由见 next()
     const { sourceQueueId, list } = getPlaybackSourceContext();
     if (list.length === 0) return;
 
     if (sourceQueueId === DISCOVER_QUEUE_ID) {
       const index = list.findIndex((song) => String(song.id) === String(state.currentTrackId));
       const track = list.slice(0, Math.max(0, index)).reverse().find(isPlayableSong);
-      if (track) await playTrack(String(track.id), list, { sourceQueueId });
+      if (track) {
+        await playTrack(String(track.id), list, {
+          sourceQueueId,
+          preResolved: backgroundResolvedByTrack.get(String(track.id)),
+          fallbackOnPreResolvedFailure: true,
+        });
+      }
       return;
     }
 
@@ -2330,7 +2373,11 @@ export const createPlaybackManager = (
       const prevTrackId = state.shuffleHistory.pop()!;
       const prevSong = list.find((s) => String(s.id) === prevTrackId);
       if (prevSong && isPlayableSong(prevSong)) {
-        void playTrack(String(prevSong.id), list, { sourceQueueId });
+        void playTrack(String(prevSong.id), list, {
+          sourceQueueId,
+          preResolved: backgroundResolvedByTrack.get(String(prevSong.id)),
+          fallbackOnPreResolvedFailure: true,
+        });
         return;
       }
       // 历史中的歌曲在列表中已不存在或不可播放，继续尝试更早的历史
@@ -2338,7 +2385,11 @@ export const createPlaybackManager = (
         const olderTrackId = state.shuffleHistory.pop()!;
         const olderSong = list.find((s) => String(s.id) === olderTrackId);
         if (olderSong && isPlayableSong(olderSong)) {
-          void playTrack(String(olderSong.id), list, { sourceQueueId });
+          void playTrack(String(olderSong.id), list, {
+            sourceQueueId,
+            preResolved: backgroundResolvedByTrack.get(String(olderSong.id)),
+            fallbackOnPreResolvedFailure: true,
+          });
           return;
         }
       }
@@ -2350,7 +2401,11 @@ export const createPlaybackManager = (
     prevIndex = findPlayableIndex(list, prevIndex, false, true);
     const prevSong = list[prevIndex];
     if (!prevSong) return;
-    void playTrack(prevSong.id, list, { sourceQueueId });
+    void playTrack(prevSong.id, list, {
+      sourceQueueId,
+      preResolved: backgroundResolvedByTrack.get(String(prevSong.id)),
+      fallbackOnPreResolvedFailure: true,
+    });
   };
 
   const stop = () => {

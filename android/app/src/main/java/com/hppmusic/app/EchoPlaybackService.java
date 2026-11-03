@@ -491,6 +491,39 @@ public final class EchoPlaybackService extends MediaSessionService {
                 if (isPlaying && !coPlayWithOthers) applyAudioFocusMode();
             }
 
+            /**
+             * 重复 / 随机模式被外部改动时抢回控制权。
+             *
+             * 车机、蓝牙控制器、系统媒体面板都能通过 MediaSession 直接
+             * `setRepeatMode` / `setShuffleModeEnabled`，**完全绕开**
+             * applyBackgroundPlaybackMode —— backgroundRepeatMode 还是旧值，
+             * 我们自己也不会再纠正。最典型的后果是车机把模式设成
+             * REPEAT_MODE_ONE：EOF 永远进不了 STATE_ENDED（渲染层收不到结束事件），
+             * 同时 getNextMediaItemIndex() 返回当前项 —— 表现为"单曲循环 +
+             * 按下一首没反应"，正是用户报的那个问题。
+             *
+             * `setRepeatMode` 会再次回调本方法，但那一刻值已经等于期望值，不再递归。
+             */
+            @Override
+            public void onRepeatModeChanged(int repeatMode) {
+                if (backgroundRepeatMode < 0 || !isPlayerReady()) return;
+                int desired = desiredRepeatMode();
+                if (repeatMode != desired) {
+                    Log.w(TAG, "重复模式被外部改为 " + repeatMode + "，恢复为 " + desired);
+                    player.setRepeatMode(desired);
+                }
+            }
+
+            @Override
+            public void onShuffleModeEnabledChanged(boolean shuffleModeEnabled) {
+                if (backgroundRepeatMode < 0 || !isPlayerReady()) return;
+                boolean desired = backgroundRepeatMode == 3;
+                if (shuffleModeEnabled != desired) {
+                    Log.w(TAG, "随机开关被外部改为 " + shuffleModeEnabled + "，恢复为 " + desired);
+                    player.setShuffleModeEnabled(desired);
+                }
+            }
+
             @Override
             public void onMediaItemTransition(@Nullable MediaItem mediaItem, int reason) {
                 if (backgroundPlaylistActive && mediaItem != null
@@ -560,12 +593,12 @@ public final class EchoPlaybackService extends MediaSessionService {
 
                         String type;
                         switch (event.getKeyCode()) {
+                            // 上下首不在这里 seek：原生窗口只有几首候选，在里面切等于
+                            // "只在候选池里打转"。交给渲染层按整列表语义决定（见 onStartCommand）。
                             case KeyEvent.KEYCODE_MEDIA_NEXT:
-                                if (skipNativeQueueTrack(1)) return true;
                                 type = "NextSong";
                                 break;
                             case KeyEvent.KEYCODE_MEDIA_PREVIOUS:
-                                if (skipNativeQueueTrack(-1)) return true;
                                 type = "PreviousSong";
                                 break;
                             case KeyEvent.KEYCODE_MEDIA_PLAY:
@@ -721,12 +754,13 @@ public final class EchoPlaybackService extends MediaSessionService {
                     if (player.isPlaying()) player.pause(); else player.play();
                     break;
                 case ACTION_NEXT:
-                    // 有原生预置项时直接切，后台不依赖 WebView；没有预置项时暂存
-                    // NextSong，回到前台后由渲染层按真实队列/随机模式处理。
-                    if (!skipNativeQueueTrack(1)) emitMediaControl("NextSong");
+                    // 一律交回渲染层决定下一首：原生窗口只有 BACKGROUND_QUEUE_AHEAD 首，
+                    // 在里面 seek 等于"只在候选池里打转"（随机模式实测只有 4 首循环）。
+                    // stopWithTask=true 之后 WebView 和 service 同生共死，能放就一定有 JS。
+                    emitMediaControl("NextSong");
                     break;
                 case ACTION_PREVIOUS:
-                    if (!skipNativeQueueTrack(-1)) emitMediaControl("PreviousSong");
+                    emitMediaControl("PreviousSong");
                     break;
                 case ACTION_STOP:
                     player.stop();
@@ -1065,30 +1099,53 @@ public final class EchoPlaybackService extends MediaSessionService {
 
     private void applyBackgroundPlaybackMode() {
         player.setShuffleModeEnabled(backgroundRepeatMode == 3);
-        // 只有后台队列已就绪时才允许原生列表循环。刚 load 完、队列还没预置好时
-        // 播放列表里只有当前这一首，此时 REPEAT_MODE_ALL 会让 ExoPlayer 无限重播它
-        // 且永远不进 STATE_ENDED —— 渲染层收不到结束事件就不会切歌，表现为
-        // "随机/列表循环播完不切歌、循环当前歌"（息屏、连车机时后台队列预置不上，必现）。
-        // ⚠️ 不能用 backgroundExpectedCount == 1 判"单曲歌单"：resetBackgroundQueueState()
-        // 也把它置 1，"未预置"和"单曲歌单"会无法区分。
-        boolean canRepeatList = backgroundPlaylistActive;
-        player.setRepeatMode(backgroundRepeatMode == 1 ? Player.REPEAT_MODE_ONE
-                : backgroundRepeatMode >= 2 && canRepeatList ? Player.REPEAT_MODE_ALL : Player.REPEAT_MODE_OFF);
+        player.setRepeatMode(desiredRepeatMode());
     }
 
+    /**
+     * 当前播放模式对应到原生播放器"应该"处于的重复模式。
+     *
+     * 只有后台队列已就绪时才允许原生列表循环。刚 load 完、队列还没预置好时
+     * 播放列表里只有当前这一首，此时 REPEAT_MODE_ALL 会让 ExoPlayer 无限重播它
+     * 且永远不进 STATE_ENDED —— 渲染层收不到结束事件就不会切歌，表现为
+     * "随机/列表循环播完不切歌、循环当前歌"（息屏、连车机时后台队列预置不上，必现）。
+     * ⚠️ 不能用 backgroundExpectedCount == 1 判"单曲歌单"：resetBackgroundQueueState()
+     * 也把它置 1，"未预置"和"单曲歌单"会无法区分。
+     */
+    private int desiredRepeatMode() {
+        boolean canRepeatList = backgroundPlaylistActive;
+        return backgroundRepeatMode == 1 ? Player.REPEAT_MODE_ONE
+                : backgroundRepeatMode >= 2 && canRepeatList ? Player.REPEAT_MODE_ALL : Player.REPEAT_MODE_OFF;
+    }
+
+    /**
+     * ⚠️ 目前**没有任何调用点**：手动上下首（界面 + 耳机/车机按键）都改走渲染层，
+     * 因为原生窗口只有 BACKGROUND_QUEUE_AHEAD 首，在里面 seek 等于"只在候选池里
+     * 打转"（随机模式实测 4 首循环）。保留方法是为了不破坏 skipQueueTrack 这个
+     * 插件 API；真要删得连 EchoNativePlayerPlugin / 渲染层 bridge 一起删。
+     */
     private boolean skipNativeQueueTrack(int direction) {
         if (!backgroundPlaylistActive || player.getMediaItemCount() == 0) return false;
         // 暂时只有 [A,D] 时不能把 D 的上一首当成 A；列表还在取链时交回逻辑队列。
         if (player.getMediaItemCount() < backgroundExpectedCount) return false;
+        int itemCount = player.getMediaItemCount();
+        int currentIndex = player.getCurrentMediaItemIndex();
+        if (currentIndex == C.INDEX_UNSET) return false;
         int nextIndex = direction > 0 ? player.getNextMediaItemIndex() : player.getPreviousMediaItemIndex();
-        // 单曲循环只约束自然结束，用户明确上下首仍然走列表并允许首尾切换。
-        if (nextIndex == C.INDEX_UNSET && backgroundRepeatMode == 1) {
-            nextIndex = direction > 0 ? 0 : player.getMediaItemCount() - 1;
-        }
-        if (nextIndex == C.INDEX_UNSET) {
+        /**
+         * ⚠️ getNext/PreviousMediaItemIndex 是**带 repeat 语义**的：
+         * REPEAT_MODE_ONE 下它返回的是当前项（不是 INDEX_UNSET），旧代码据此
+         * seekTo 同一首 —— 单曲循环时按"下一首"只会重播当前曲。
+         * 单曲循环只该约束自然结束，用户明确上下首仍要走列表并允许首尾切换，
+         * 所以这里必须自己兜底换项。
+         */
+        if (nextIndex == C.INDEX_UNSET || nextIndex == currentIndex) {
             // 顺序模式已在末尾/开头：本次没做任何事，必须交回渲染层。
-            // 旧实现无条件 return true，导致“下一首”被吞掉（既不切歌也不报错）。
-            return false;
+            // 旧实现无条件 return true，导致"下一首"被吞掉（既不切歌也不报错）。
+            if (backgroundRepeatMode == 0) return false;
+            nextIndex = direction > 0
+                    ? (currentIndex + 1) % itemCount
+                    : (currentIndex + itemCount - 1) % itemCount;
         }
         player.seekTo(nextIndex, 0);
         player.play();
