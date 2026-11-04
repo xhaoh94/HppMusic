@@ -250,7 +250,6 @@ export const handleApiRequest = async (request: ApiRequest): Promise<ApiResponse
       (config as Record<string, unknown>).ip = '';
       return util.createRequest(config);
     })) as ApiResponse;
-
     if (needsQualityLedger(request.url)) recordQualityOutcome(query, moduleResponse?.body);
 
     return {

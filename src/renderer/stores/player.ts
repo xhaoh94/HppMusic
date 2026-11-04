@@ -483,10 +483,9 @@ export const usePlayerStore = defineStore(
         void resolver.fetchClimaxMarks(track);
 
         if (!seamless && previousTime > 0) {
-          state.recentSeekIgnoreEnd = true;
-          window.setTimeout(() => {
-            state.recentSeekIgnoreEnd = false;
-          }, 1500);
+          // 时间戳而不是定时器复位：后台定时器会被节流到 1 次/分钟，
+          // 布尔量卡住会把之后真实的 EOF 一起吞掉（详见 state 里的字段注释）。
+          state.recentSeekIgnoreEndUntil = Date.now() + 1500;
           let actualDuration = engine.duration;
           if (actualDuration <= 0) {
             for (let i = 0; i < 10; i++) {
@@ -1165,8 +1164,22 @@ export const usePlayerStore = defineStore(
         pause: () => {
           if (getPlaybackIsPlaying(state)) playbackManager.togglePlay();
         },
-        previoustrack: () => playbackManager.prev(),
-        nexttrack: () => playbackManager.next(),
+        previoustrack: () => {
+          engine.debugLog(
+            `prev: mode=${state.playMode} track=${state.currentTrackId} awaiting=${state.awaitingTrackLoad} loading=${getPlaybackIsLoading(state)} list=${(state.currentPlaylist ?? []).length} queue=${state.currentSourceQueueId}`,
+          );
+          void playbackManager.prev();
+        },
+        nexttrack: () => {
+          // 排查"通知栏切歌没反应"：这一行能区分"JS 没收到"和"收到但没切成功"
+          engine.debugLog(
+            `next: mode=${state.playMode} track=${state.currentTrackId} awaiting=${state.awaitingTrackLoad} loading=${getPlaybackIsLoading(state)} list=${(state.currentPlaylist ?? []).length} queue=${state.currentSourceQueueId}`,
+          );
+          void playbackManager.next().then(
+            () => engine.debugLog(`next: done track=${state.currentTrackId}`),
+            (error) => engine.debugLog(`next: failed ${String(error)}`),
+          );
+        },
         nativeTrackChanged: () => onNativeTrackChanged(),
         seekto: (time) => playbackManager.seek(time),
         seekbackward: (offset) =>
@@ -1306,13 +1319,17 @@ export const usePlayerStore = defineStore(
       const handleNativePlaybackEnded = () => {
         if (state.playbackEnded) return;
         setEnginePlaybackStatus(state, 'stopped');
-        if (!state.recentSeekIgnoreEnd) {
+        // 按时间戳判断"这条结束是不是 seek 引起的假结束"。
+        // 原来的写法是布尔 + setTimeout 复位，后台被节流时会长期为 true，
+        // 把真实结束也吞掉 —— 表现为"播完不切歌"。
+        if (Date.now() >= state.recentSeekIgnoreEndUntil) {
+          state.recentSeekIgnoreEndUntil = 0;
           state.playbackEnded = true;
           const sleepTimerCompleted = sleepTimer.trackEnded();
           emitPlayerEvent('ended');
           if (!sleepTimerCompleted) void handlePlaybackEnded();
         } else {
-          state.recentSeekIgnoreEnd = false;
+          state.recentSeekIgnoreEndUntil = 0;
         }
       };
 
@@ -1432,8 +1449,34 @@ export const usePlayerStore = defineStore(
       };
       setupScope?.run(() => onScopeDispose(disposeResumeListeners));
 
+      /*
+       * 后台存活心跳（诊断用）。
+       *
+       * 排查"后台挂久了切不了歌"时，唯一能区分"renderer 被冻死"和"事件到了但逻辑没走"
+       * 的观测点：tick 由原生 Handler 每 250ms 推来，只要这行还在打，JS 就在执行。
+       */
+      let lastHeartbeatAt = 0;
+
       const events: PlayerEngineEvents = {
         timeUpdate: (currentTime, payload) => {
+          if (Date.now() - lastHeartbeatAt >= 30_000) {
+            lastHeartbeatAt = Date.now();
+            engine.debugLog(
+              `hb tick=${Math.round(currentTime)} playing=${getPlaybackIsPlaying(state)} awaiting=${state.awaitingTrackLoad} track=${state.currentTrackId}`,
+            );
+          }
+          /*
+           * 后台兜底收口。
+           *
+           * 原生 tick 是 250ms 一次、由 Java 侧 Handler 推出，页面被节流也照常到达；
+           * 而 JS 的 setTimeout/setInterval 在后台会被降到约 1 次/分钟。凡是"到点该
+           * 做什么"的判定，都在这里按时间戳补一遍 —— 三个调用都是幂等的，前台多跑
+           * 一次没有副作用。
+           */
+          playbackManager.flushPendingSeek();
+          playbackManager.flushAutoNext();
+          sleepTimer.tick();
+
           if (
             window.electron?.platform === 'android' && !state.awaitingTrackLoad &&
             Number(payload?.trackSeq) > Number(state.nativeTrackSeq ?? 0)

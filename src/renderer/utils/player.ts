@@ -725,6 +725,15 @@ export class PlayerEngine {
     });
   }
 
+  /** 诊断日志：写进原生 logcat（tag=EchoJS）。release 包里 console 不可见。 */
+  debugLog(message: string): void {
+    // 移动端的 Capacitor 桥有这个通道，桌面端没有；类型在 electron.d.ts（vendor）
+    // 里没有声明，这里按结构化类型探测，缺失时静默跳过。
+    const bridge = player as unknown as { debugLog?: (m: string) => Promise<void> } | null;
+    const pending = bridge?.debugLog?.(message);
+    if (pending) void pending.catch(() => undefined);
+  }
+
   setVolume(value: number): number {
     const next = clamp(value, 0, 100);
     this.volumeValue = next;
@@ -937,42 +946,42 @@ export class PlayerEngine {
     seekforward?: (offset?: number) => void;
   }): void {
     // 监听主进程转发的原生媒体控制事件
-    const offEvent = mediaControls?.onEvent?.(
-      (event: { type: string; positionMs?: number; offsetMs?: number }) => {
-        switch (event.type) {
-          case 'Play':
-            handlers.play?.();
-            break;
-          case 'Pause':
-            handlers.pause?.();
-            break;
-          case 'NativeTrackTransition':
-            handlers.nativeTrackChanged?.();
-            break;
-          case 'NextSong':
-            handlers.nexttrack?.();
-            break;
-          case 'PreviousSong':
-            handlers.previoustrack?.();
-            break;
-          case 'Seek':
-            if (event.positionMs !== undefined) {
-              handlers.seekto?.(event.positionMs / 1000);
-            }
-            break;
-          case 'SeekForward':
-            handlers.seekforward?.(
-              event.offsetMs !== undefined ? event.offsetMs / 1000 : undefined,
-            );
-            break;
-          case 'SeekBackward':
-            handlers.seekbackward?.(
-              event.offsetMs !== undefined ? event.offsetMs / 1000 : undefined,
-            );
-            break;
-        }
-      },
-    );
+    const dispatch = (event: { type: string; positionMs?: number; offsetMs?: number }) => {
+      switch (event.type) {
+        case 'Play':
+          handlers.play?.();
+          break;
+        case 'Pause':
+          handlers.pause?.();
+          break;
+        case 'NativeTrackTransition':
+          handlers.nativeTrackChanged?.();
+          break;
+        case 'NextSong':
+          handlers.nexttrack?.();
+          break;
+        case 'PreviousSong':
+          handlers.previoustrack?.();
+          break;
+        case 'Seek':
+          if (event.positionMs !== undefined) {
+            handlers.seekto?.(event.positionMs / 1000);
+          }
+          break;
+        case 'SeekForward':
+          handlers.seekforward?.(
+            event.offsetMs !== undefined ? event.offsetMs / 1000 : undefined,
+          );
+          break;
+        case 'SeekBackward':
+          handlers.seekbackward?.(
+            event.offsetMs !== undefined ? event.offsetMs / 1000 : undefined,
+          );
+          break;
+      }
+    };
+
+    const offEvent = mediaControls?.onEvent?.(dispatch);
     if (offEvent) this.cleanupFns.push(offEvent);
   }
 

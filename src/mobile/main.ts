@@ -36,6 +36,7 @@ import '@mobile/design/tokens.css';
 import { initApiBridge } from '@bridge/apiBridge';
 import { initBackButtonHook } from '@bridge/backButton';
 import { applySafeAreaInsets } from '@bridge/safeArea';
+import { installBackgroundAudioKeepAlive } from '@mobile/utils/backgroundKeepAlive';
 
 /** 桥必须在下面任何一个 await import 之前挂好 */
 const bridge = initApiBridge({ version: __APP_VERSION__ });
@@ -67,5 +68,6 @@ app.config.errorHandler = (error, _instance, info) => {
 
 void router.isReady().then(() => {
   app.mount('#app');
+  installBackgroundAudioKeepAlive();
   console.info(`[mobile] mounted, bridge modules = ${bridge.moduleCount}`);
 });

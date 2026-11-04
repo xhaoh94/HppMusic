@@ -64,22 +64,19 @@ import {
 /** Fallback prefetch window when the transition settings are unavailable. */
 const GAPLESS_PREFETCH_WINDOW_SECS = 30;
 /**
- * 原生后台队列一次最多准备多少首（不含当前曲）。
+ * 原生队列里预置几首"下一首"。
  *
- * ⚠️ 不要一次把整张歌单全取一遍：每首都是一到两次网络取链，60 首就是上百个
- * 串行请求 —— 既拖慢当前播放（resolver 的音质授权序号是全局的，被后面的请求
- * 顶掉就返回空地址），也纯属浪费。
+ * ⚠️ 只为了**切歌时的无缝**：EOF 那一刻如果原生手里已经握着下一首地址，就能直接
+ * 换项、零网络、零空档；否则要先取链（1~2 秒），车上听得出来。
  *
- * 这个数字**不是"随机能覆盖多少首"的上限**：窗口每首歌都会按整列表的乱序重建，
- * 它只决定"一次提前解析几个地址"，作用两条：
- * 1. 无缝换曲 —— EOF 时下一首地址已经在原生手里，不用等网络往返（否则每首歌
- *    交界都有 1~2 秒空档，车上特别明显）；
- * 2. 容忍一次重建失败 —— 网络抖一下还有缓冲，不至于立刻回退成循环当前窗口。
+ * **和"能不能切歌"无关**：手动上下首、随机播放的落点都由渲染层决定，
+ * 不再在原生窗口里 seek（见 next()/prev() 的注释）。所以这个数字调小甚至不预置，
+ * 切歌照样正常，只是交界处会多一段取链等待。
  *
- * 3 首（原生里共 4 项）：当前曲播完还有两层缓冲，够覆盖一次失败重试；再大只是
- * 白花取链次数。
+ * 也不要一次把整张歌单全取一遍：每首都是一到两次网络取链，而 resolver 的音质
+ * 授权序号是全局的，后发的请求会把当前正在播那首的取链顶成过期、返回空地址。
  */
-const BACKGROUND_QUEUE_AHEAD = 3;
+export const BACKGROUND_QUEUE_AHEAD = 1;
 const GAPLESS_SEEK_REGISTRATION_WINDOW_SECS = 2;
 
 type GaplessPreparedSource = {
@@ -470,11 +467,17 @@ export const createPlaybackManager = (
     return false;
   };
 
+  /** 自动下一首的到期时间戳与所属曲目；定时器只是前台快路径，见 flushAutoNext。 */
+  let autoNextDeadline = 0;
+  let autoNextTrackId: string | null = null;
+
   const clearAutoNextTimer = () => {
     if (state.autoNextTimer !== null) {
       window.clearTimeout(state.autoNextTimer);
       state.autoNextTimer = null;
     }
+    autoNextDeadline = 0;
+    autoNextTrackId = null;
   };
 
   const getPlaybackSourceQueueId = (): string | null =>
@@ -1041,7 +1044,7 @@ export const createPlaybackManager = (
       state.climaxMarks = [];
       state.lastError = null;
       state.stallRecovering = false;
-      state.recentSeekIgnoreEnd = false;
+      state.recentSeekIgnoreEndUntil = 0;
       state.seekTargetTime = null;
       state.nativeSeekActive = false;
       state.nativeSeekGeneration = null;
@@ -1466,6 +1469,32 @@ export const createPlaybackManager = (
     });
   };
 
+  /**
+   * 到点就切下一首（卡死恢复用）。
+   *
+   * 由定时器（前台）和原生 tick（后台）共用，必须幂等。
+   * `force` 同 flushPendingSeek：定时器可能略早于到期时间触发。
+   */
+  const flushAutoNext = (force = false) => {
+    if (autoNextDeadline === 0) return;
+    if (!force && Date.now() < autoNextDeadline) return;
+    const currentTrackId = autoNextTrackId;
+    autoNextDeadline = 0;
+    autoNextTrackId = null;
+    if (state.autoNextTimer !== null) {
+      window.clearTimeout(state.autoNextTimer);
+      state.autoNextTimer = null;
+    }
+    if (
+      String(state.currentTrackId ?? '') !== currentTrackId ||
+      getPlaybackIsPlaying(state) ||
+      getPlaybackIsLoading(state)
+    )
+      return;
+    state.autoNextAttempts += 1;
+    void skipToNextAfterFailure();
+  };
+
   const scheduleAutoNext = () => {
     if (state.autoNextSuppressed || !settingStore.autoNext || !state.currentTrackId) return;
     const { list, sourceQueueId } = getPlaybackSourceContext();
@@ -1478,16 +1507,12 @@ export const createPlaybackManager = (
 
     clearAutoNextTimer();
     const delayMs = Math.max(0, Math.floor((settingStore.autoNextDelaySeconds || 0) * 1000));
+    autoNextDeadline = Date.now() + delayMs;
+    autoNextTrackId = currentTrackId;
+    // 定时器只是前台快路径；后台被节流时由原生 tick 调 flushAutoNext 兜底。
     state.autoNextTimer = window.setTimeout(() => {
       state.autoNextTimer = null;
-      if (
-        String(state.currentTrackId ?? '') !== currentTrackId ||
-        getPlaybackIsPlaying(state) ||
-        getPlaybackIsLoading(state)
-      )
-        return;
-      state.autoNextAttempts += 1;
-      void skipToNextAfterFailure();
+      flushAutoNext(true);
     }, delayMs);
   };
 
@@ -1659,6 +1684,10 @@ export const createPlaybackManager = (
 
     let resolved: ResolvedAudioSource;
     let usedPreResolvedSource = false;
+    // 诊断：后台切歌卡住时，这两行能区分"取链慢"和"取链之后的步骤卡住"
+    engine.debugLog(
+      `pt:resolve:start id=${resolvedId} pre=${Boolean(options?.preResolved)} at=${Date.now()}`,
+    );
     try {
       if (options?.preResolved && options.preResolvedStage) {
         const transformed = await resolver.transformAudioSource(
@@ -1690,8 +1719,10 @@ export const createPlaybackManager = (
       }
       return;
     }
+    engine.debugLog(
+      `pt:resolve:done id=${resolvedId} url=${resolved?.url ? 'y' : 'n'} at=${Date.now()}`,
+    );
     if (requestSeq !== state.playbackRequestSeq) return;
-
     const resolvedLyricAlbumAudioId = String(track.albumAudioId ?? track.mixSongId ?? '');
     if (
       options?.fmCandidate &&
@@ -1980,6 +2011,13 @@ export const createPlaybackManager = (
   let lastSeekAt = 0;
   let pendingSeekTimer: number | null = null;
   let pendingSeekTarget: number | null = null;
+  /**
+   * 合并窗口的到期时间戳。
+   *
+   * 定时器只是前台加速路径；页面退到后台后它会被节流到 1 次/分钟，
+   * 所以真正的兜底是 `flushPendingSeek()` —— 由原生每 250ms 推来的 tick 调。
+   */
+  let pendingSeekDeadline = 0;
   /** 合并窗口里只能“迟到”一次 seek：必须同时绑定发起时的曲目与请求代号 */
   let pendingSeekRequestSeq: number | null = null;
   let pendingSeekTrackId: string | null = null;
@@ -1998,6 +2036,39 @@ export const createPlaybackManager = (
     pendingSeekTarget = null;
     pendingSeekRequestSeq = null;
     pendingSeekTrackId = null;
+    pendingSeekDeadline = 0;
+  };
+
+  /**
+   * 派发合并窗口里挂着的 seek（到期才发）。
+   *
+   * 由定时器（前台）和原生 tick（后台）共同调用，必须幂等：
+   * 没有待发目标直接返回。`force` 用于定时器到点那条路径 —— 定时器可能比
+   * 到期时间早一两毫秒触发，死抠时间戳会让它白等一轮 tick。
+   */
+  const flushPendingSeek = (force = false): void => {
+    const target = pendingSeekTarget;
+    if (target === null) return;
+    if (!force && Date.now() < pendingSeekDeadline) return;
+    const targetRequestSeq = pendingSeekRequestSeq;
+    const targetTrackId = pendingSeekTrackId;
+    pendingSeekTarget = null;
+    pendingSeekRequestSeq = null;
+    pendingSeekTrackId = null;
+    pendingSeekDeadline = 0;
+    if (pendingSeekTimer !== null) {
+      window.clearTimeout(pendingSeekTimer);
+      pendingSeekTimer = null;
+    }
+    // 窗口期里用户切了歌 / 换了请求：这条 seek 已经没有意义，直接丢。
+    if (
+      targetRequestSeq !== state.playbackRequestSeq ||
+      targetTrackId !== state.currentTrackId
+    ) {
+      return;
+    }
+    lastSeekAt = Date.now();
+    void dispatchSeek(target);
   };
 
   const seek = (time: number): Promise<void> => {
@@ -2007,25 +2078,12 @@ export const createPlaybackManager = (
       pendingSeekTarget = time;
       pendingSeekRequestSeq = state.playbackRequestSeq;
       pendingSeekTrackId = state.currentTrackId;
+      pendingSeekDeadline = now + SEEK_COALESCE_MS - (now - lastSeekAt);
       if (pendingSeekTimer === null) {
+        // 前台快路径：到点立刻发。后台会被节流，靠 flushPendingSeek 兜底。
         pendingSeekTimer = window.setTimeout(() => {
           pendingSeekTimer = null;
-          const target = pendingSeekTarget;
-          const targetRequestSeq = pendingSeekRequestSeq;
-          const targetTrackId = pendingSeekTrackId;
-          pendingSeekTarget = null;
-          pendingSeekRequestSeq = null;
-          pendingSeekTrackId = null;
-          if (target === null) return;
-          // 窗口期里用户切了歌 / 换了请求：这条 seek 已经没有意义，直接丢。
-          if (
-            targetRequestSeq !== state.playbackRequestSeq ||
-            targetTrackId !== state.currentTrackId
-          ) {
-            return;
-          }
-          lastSeekAt = Date.now();
-          void dispatchSeek(target);
+          flushPendingSeek(true);
         }, SEEK_COALESCE_MS - (now - lastSeekAt));
       }
       return Promise.resolve();
@@ -2052,12 +2110,9 @@ export const createPlaybackManager = (
     // 否则播放完毕后不会自动切下一首
     const remaining = effectiveDuration - targetTime;
     const nearEnd = effectiveDuration > 0 && remaining < GAPLESS_SEEK_REGISTRATION_WINDOW_SECS;
-    state.recentSeekIgnoreEnd = !nearEnd;
-    if (!nearEnd) {
-      window.setTimeout(() => {
-        if (dispatchSeq === seekDispatchSeq) state.recentSeekIgnoreEnd = false;
-      }, 800);
-    }
+    // seek 之后原生可能补发一条"结束"事件，用时间窗把它当假结束忽略。
+    // 时间戳而非定时器：后台节流会让这个窗口无限延长，把真实的结束也吞掉。
+    state.recentSeekIgnoreEndUntil = nearEnd ? 0 : Date.now() + 800;
     // User transport takes priority over background transition analysis.
     const seekPromise = engine.seek(targetTime);
     let shouldPrepare = false;
@@ -2629,6 +2684,8 @@ export const createPlaybackManager = (
   return {
     applyFailedPlaybackState,
     clearAutoNextTimer,
+    flushAutoNext,
+    flushPendingSeek,
     skipToNextAfterFailure,
     scheduleAutoNext,
     playTrack,

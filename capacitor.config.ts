@@ -7,6 +7,14 @@ const config: CapacitorConfig = {
   android: {
     // 上游音频与图片大量走 http，WebView 默认会拦（同 EchoMusic 的处理）。
     allowMixedContent: true,
+    /**
+     * ⚠️ 必须开。默认的原生→JS 消息走 WebView 的 WebMessageListener，实测
+     * App 退到后台约 5 分钟后这条通道**不再投递**（evaluateJavascript 仍可用）。
+     * 而本项目的 HTTP 走 CapacitorHttp（JS→原生→响应再回 JS），响应回不来
+     * 就等于取链永远挂住 —— 后台切歌卡死、进度不更新、播完不切下一首。
+     * legacy 桥用 evaluateJavascript 回传，后台一直可用。
+     */
+    useLegacyBridge: true,
   },
   server: {
     androidScheme: 'https',

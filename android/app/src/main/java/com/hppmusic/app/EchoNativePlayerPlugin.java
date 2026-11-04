@@ -85,6 +85,8 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
     public void load(PluginCall call) {
         String url = call.getString("url", "");
         int requestId = call.getInt("requestId", -1);
+        android.util.Log.i("EchoBridge", "JS -> load requestId=" + requestId
+                + " host=" + (url != null && url.contains("://") ? url.split("://")[0] : "?"));
         withService(call, service -> service.load(url, requestId), result -> {
             JSObject value = new JSObject();
             value.put("duration", result.duration);
@@ -119,6 +121,35 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
     public void setVolume(PluginCall call) {
         double volume = call.getDouble("volume", 100.0);
         withService(call, service -> service.setVolume(volume), ignored -> new JSObject());
+    }
+
+    /**
+     * 渲染层的诊断日志通道。
+     *
+     * release 包里 Capacitor 不会把 console 转到 logcat，排查后台/媒体按键这类
+     * "JS 到底跑没跑"的问题时完全瞎 —— 需要看 JS 侧状态时用它打一行。
+     */
+    @PluginMethod
+    public void log(PluginCall call) {
+        android.util.Log.i("EchoJS", call.getString("message", ""));
+        call.resolve();
+    }
+
+    /** 音量斜坡。渲染层的 setInterval 在后台会被节流到 1 次/分钟，淡入必须在这里做。 */
+    @PluginMethod
+    public void setVolumeRamp(PluginCall call) {
+        double from = call.getDouble("from", 0.0);
+        double to = call.getDouble("to", 100.0);
+        long durationMs = Math.max(0, call.getLong("durationMs", 0L));
+        withService(call, service -> service.setVolumeRamp(from, to, durationMs), ignored -> new JSObject());
+    }
+
+    /** 淡出到静音后暂停，并把音量还原（否则下次播放是哑的）。 */
+    @PluginMethod
+    public void pauseWithFade(PluginCall call) {
+        long durationMs = Math.max(0, call.getLong("durationMs", 0L));
+        double restoreVolume = call.getDouble("restoreVolume", 100.0);
+        withService(call, service -> service.pauseWithFade(durationMs, restoreVolume), ignored -> new JSObject());
     }
 
     @PluginMethod
@@ -514,21 +545,21 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
     public void onTimeUpdate(double time, long sampledAt, int trackSeq, int eventGeneration) {
         JSObject result = context(sampledAt, trackSeq, eventGeneration);
         result.put("time", time);
-        notifyListeners("timeUpdate", result);
+        emit("timeUpdate", result);
     }
 
     @Override
     public void onDurationChange(double duration, int trackSeq, int eventGeneration) {
         JSObject result = context(System.currentTimeMillis(), trackSeq, eventGeneration);
         result.put("duration", duration);
-        notifyListeners("durationChange", result);
+        emit("durationChange", result);
     }
 
     @Override
     public void onSeeked(double time, long sampledAt, int trackSeq, int eventGeneration) {
         JSObject result = context(sampledAt, trackSeq, eventGeneration);
         result.put("time", time);
-        notifyListeners("seeked", result);
+        emit("seeked", result);
     }
 
     @Override
@@ -537,7 +568,7 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
         JSObject result = context(sampledAt, trackSeq, eventGeneration);
         result.put("active", active);
         result.put("time", time);
-        notifyListeners("seekStateChange", result);
+        emit("seekStateChange", result);
     }
 
     @Override
@@ -547,14 +578,14 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
         result.put("playing", playing);
         result.put("paused", paused);
         result.put("timePos", time);
-        notifyListeners("stateChange", result);
+        emit("stateChange", result);
     }
 
     @Override
     public void onPlaybackEnd(String reason, long sampledAt, int trackSeq, int eventGeneration) {
         JSObject result = context(sampledAt, trackSeq, eventGeneration);
         result.put("reason", reason);
-        notifyListeners("playbackEnd", result);
+        emit("playbackEnd", result);
     }
 
     @Override
@@ -563,7 +594,7 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
         result.put("path", url);
         result.put("seq", seq);
         result.put("duration", duration);
-        notifyListeners("fileLoaded", result);
+        emit("fileLoaded", result);
     }
 
     @Override
@@ -573,15 +604,48 @@ public final class EchoNativePlayerPlugin extends Plugin implements EchoPlayback
         result.put("message", message);
         result.put("errorCode", errorCode);
         result.put("reason", reason);
-        notifyListeners("error", result);
+        emit("error", result);
+    }
+
+    private long eventSeq = 0;
+
+    /**
+     * 把事件推给 JS。
+     *
+     * ⚠️ 必须双通道。Capacitor 的 notifyListeners 走 WebMessageListener
+     * （jsProxy.postMessage），实测 App 退到后台约 5 分钟后这条通道就**不再投递**，
+     * 而 evaluateJavascript 一直可用 —— 表现为"后台切不了歌、进度不再更新、
+     * 一首放完不切下一首"，但音频本身在原生侧照常播放。
+     * 直投通道带 seq，JS 侧按事件名去重，前台两条都到也只处理一次。
+     */
+    private void emit(String eventName, JSObject payload) {
+        long seq = ++eventSeq;
+        payload.put("__seq", seq);
+        notifyListeners(eventName, payload);
+        // legacy 桥（capacitor.config 里 useLegacyBridge）本身就是 evaluateJavascript，
+        // 那条路后台也通，不用再直投一份；只有走 WebMessage 时才需要兜底。
+        if (getBridge() != null && !getBridge().getConfig().isUsingLegacyBridge()) {
+            dispatchByEval(eventName, payload);
+        }
+    }
+
+    private void dispatchByEval(String eventName, JSObject payload) {
+        if (getBridge() == null) return;
+        android.webkit.WebView webView = getBridge().getWebView();
+        if (webView == null) return;
+        String script = "window.dispatchEvent(new CustomEvent('hpp:native',{detail:{event:"
+                + JSObject.quote(eventName) + ",data:" + payload.toString() + "}}))";
+        // WebView 只能在 UI 线程调用；服务回调通常已在主线程，这里统一兜一层。
+        webView.post(() -> webView.evaluateJavascript(script, null));
     }
 
     @Override
     public void onMediaControl(String type, @Nullable Double position, @Nullable Double offset) {
+        Log.i("EchoBridge", "媒体控制 background=" + appInBackground + " type=" + type);
         JSObject result = new JSObject();
         result.put("type", type);
         if (position != null) result.put("positionMs", position * 1000.0);
         if (offset != null) result.put("offsetMs", offset * 1000.0);
-        notifyListeners("mediaControl", result);
+        emit("mediaControl", result);
     }
 }

@@ -68,7 +68,15 @@ export const createPlayerState = () => ({
   nativeTrackSeq: null as number | null,
   supersededNativeTrackSeq: null as number | null,
   audioEffect: 'none' as AudioEffectValue,
-  recentSeekIgnoreEnd: false,
+  /**
+   * 在这个时间点之前到达的 EOF 视为 seek 引起的假结束，直接丢弃。
+   *
+   * ⚠️ 用时间戳而不是"布尔 + setTimeout 复位"：页面退到后台后 Chromium 会把
+   * 定时器节流到约 1 次/分钟，布尔量会一直停在 true，这段时间里**真实的** EOF
+   * 也会被当成假结束吞掉 —— 表现为"播完不切歌、原地停住"。
+   * 0 表示不忽略。
+   */
+  recentSeekIgnoreEndUntil: 0,
   settingsWatcherRegistered: false,
   pendingSettingRefresh: false,
   audioSourceRefreshRequestSeq: null as number | null,

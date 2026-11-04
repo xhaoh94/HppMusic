@@ -15,7 +15,7 @@ vi.mock('../src/renderer/stores/playlist/helpers', () => ({
   toRawSong: (song: object) => ({ ...song }), toRawSongList: (songs: object[]) => songs.slice(),
 }));
 
-import { createPlaybackManager } from '../src/renderer/stores/player/playback';
+import { createPlaybackManager, BACKGROUND_QUEUE_AHEAD } from '../src/renderer/stores/player/playback';
 import { createPlayerState } from '../src/renderer/stores/player/state';
 import { nativeQueueMode, nativeQueueCandidateIndices } from '../src/shared/nativeQueueMode';
 import { createAudioManager } from '../src/renderer/stores/player/audio';
@@ -39,6 +39,7 @@ function fixture() {
   });
   const engine = {
     adoptNativePlaybackSnapshot: vi.fn(), beginSourceChange: vi.fn(), setSource: vi.fn(),
+    debugLog: vi.fn(),
     play: vi.fn(), pause: vi.fn(), setLoopFile: vi.fn(),
     setPlaybackRate: vi.fn(), applyTrackLoudness: vi.fn(), adoptPreparedTrackLoudness: vi.fn(),
     updateMediaMetadata: vi.fn(), clearBackgroundQueue: vi.fn(),
@@ -162,8 +163,9 @@ describe('原生队列的播放模式', () => {
     await f.manager.prepareBackgroundNext();
     expect(f.engine.setBackgroundRepeatMode).toHaveBeenCalledWith(expected);
     const entries = f.engine.setBackgroundNextSource.mock.calls.map(([entry]) => entry);
-    expect(entries.map(entry => entry.trackId)).toEqual(['b', 'c']);
-    expect(entries.map(entry => entry.queueIndex)).toEqual([1, 2]);
+    // 候选数量 = 预置深度（只影响无缝换曲，不影响切歌）
+    expect(entries.map(entry => entry.trackId)).toEqual(['b', 'c'].slice(0, BACKGROUND_QUEUE_AHEAD));
+    expect(entries.map(entry => entry.queueIndex)).toEqual([1, 2].slice(0, BACKGROUND_QUEUE_AHEAD));
     expect(entries.every(entry => entry.currentQueueIndex === 0 && entry.generation === 2)).toBe(true);
     expect(f.engine.setSource).not.toHaveBeenCalled();
     expect(f.engine.play).not.toHaveBeenCalled();
@@ -223,7 +225,7 @@ describe('原生队列的播放模式', () => {
     await f.manager.prepareBackgroundNext();
     expect(f.engine.setLoopFile).not.toHaveBeenCalled();
     expect(f.engine.clearBackgroundQueue).toHaveBeenCalledTimes(1);
-    expect(f.resolver.resolveAudioUrl).toHaveBeenCalledTimes(2);
+    expect(f.resolver.resolveAudioUrl).toHaveBeenCalledTimes(BACKGROUND_QUEUE_AHEAD);
   });
 
   it('手动上下首走渲染层决策，不再在原生小窗口里 seek', async () => {
@@ -271,7 +273,7 @@ describe('原生队列的播放模式', () => {
     await f.manager.prepareBackgroundNext();
     expect(f.engine.clearBackgroundQueue).toHaveBeenCalledTimes(1);
 
-    // 原生真的切到下一首：窗口必须重建，否则它会在旧的 15 首里被
+    // 原生真的切到下一首：窗口必须重建，否则它会在旧的那几首里被
     // REPEAT_MODE_ALL 永远循环（用户报的"随机只在十几首里打转"）
     f.manager.adoptNativePlaybackSnapshot(snapshot('c'));
     await f.manager.prepareBackgroundNext();
@@ -285,12 +287,12 @@ describe('原生队列的播放模式', () => {
       f.resolver.resolveAudioUrl.mockResolvedValue({ url: '' });
       await f.manager.prepareBackgroundNext();
       await f.manager.prepareBackgroundNext();
-      expect(f.resolver.resolveAudioUrl).toHaveBeenCalledTimes(2);
-      expect(f.engine.clearBackgroundQueue).toHaveBeenCalledWith(3);
+      expect(f.resolver.resolveAudioUrl).toHaveBeenCalledTimes(BACKGROUND_QUEUE_AHEAD);
+      expect(f.engine.clearBackgroundQueue).toHaveBeenCalledWith(BACKGROUND_QUEUE_AHEAD + 1);
       clock.mockReturnValue(31_001);
       f.resolver.resolveAudioUrl.mockImplementation(async (track: { id: string }) => ({ url: `https://audio/${track.id}` }));
       await f.manager.prepareBackgroundNext();
-      expect(f.engine.setBackgroundNextSource).toHaveBeenCalledTimes(2);
+      expect(f.engine.setBackgroundNextSource).toHaveBeenCalledTimes(BACKGROUND_QUEUE_AHEAD);
     } finally {
       clock.mockRestore();
     }
@@ -320,7 +322,8 @@ describe('私人FM原生推荐缓冲', () => {
     f.resolver.resolveAudioUrl.mockImplementation(async (track: { id: string }) => ({ url: `https://audio/${track.id}` }));
     await f.manager.prepareBackgroundNext();
     expect(f.engine.setBackgroundRepeatMode).toHaveBeenCalledWith(0);
-    expect(f.engine.setBackgroundNextSource.mock.calls.map(([item]) => item.trackId)).toEqual(['b', 'c']);
+    expect(f.engine.setBackgroundNextSource.mock.calls.map(([item]) => item.trackId))
+      .toEqual(['b', 'c'].slice(0, BACKGROUND_QUEUE_AHEAD));
     await f.manager.prepareBackgroundNext();
     expect(f.engine.clearBackgroundQueue).toHaveBeenCalledTimes(1);
   });
@@ -353,8 +356,14 @@ describe('私人FM原生推荐缓冲', () => {
     expect(f.state.currentTime).toBe(87.25);
     expect(q.personalFmBuffer.some((song: any) => song.id === 'b')).toBe(false);
     expect(queue.songs.some((song) => song.id === 'b')).toBe(true);
-    await vi.waitFor(() => expect(f.engine.setBackgroundNextSource).toHaveBeenCalledTimes(3));
-    expect(f.engine.setBackgroundNextSource.mock.calls[2][0]).toMatchObject({ trackId: 'd', append: true });
+    await vi.waitFor(() =>
+      expect(f.engine.setBackgroundNextSource).toHaveBeenCalledTimes(BACKGROUND_QUEUE_AHEAD + 1),
+    );
+    // 追加的是"还没预置过的新推荐"，具体是哪首取决于预置深度，这里只钉住
+    // "必须是 append、且不是已预置过的 b"这两个不变量
+    const appended = f.engine.setBackgroundNextSource.mock.calls[BACKGROUND_QUEUE_AHEAD][0];
+    expect(appended).toMatchObject({ append: true });
+    expect(appended.trackId).not.toBe('b');
     expect(f.engine.clearBackgroundQueue).toHaveBeenCalledTimes(1);
     expect(f.engine.setSource).not.toHaveBeenCalled();
     expect(f.engine.play).not.toHaveBeenCalled();

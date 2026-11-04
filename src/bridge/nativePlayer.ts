@@ -14,6 +14,12 @@ interface NativePlayerPlugin {
   stop(): Promise<void>;
   seek(options: { time: number }): Promise<void>;
   setVolume(options: { volume: number }): Promise<void>;
+  /** 渲染层诊断日志：release 包里 console 不进 logcat，排查用。 */
+  log(options: { message: string }): Promise<void>;
+  /** 原生音量斜坡：WebView 后台会节流 setInterval，淡入淡出必须在这一层做。 */
+  setVolumeRamp(options: { from: number; to: number; durationMs: number }): Promise<void>;
+  /** 淡出到静音后暂停并还原音量，整段在原生完成，调用立即返回。 */
+  pauseWithFade(options: { durationMs: number; restoreVolume: number }): Promise<void>;
   setSpeed(options: { speed: number }): Promise<void>;
   setLoopFile(options: { loop: boolean }): Promise<void>;
   setPauseOnDeviceDisconnect(options: { enabled: boolean }): Promise<void>;
@@ -129,6 +135,8 @@ type PlayerBridge = {
   stop: () => Promise<void>;
   seek: (time: number) => Promise<void>;
   setVolume: (volume: number) => Promise<void>;
+  /** 渲染层诊断日志（走原生 logcat，tag = EchoJS）。 */
+  debugLog: (message: string) => Promise<void>;
   setSpeed: (speed: number) => Promise<void>;
   setLoopFile: (loop: boolean) => Promise<void>;
   setPauseOnDeviceDisconnect: (enabled: boolean) => Promise<void>;
@@ -236,6 +244,14 @@ export interface NativePlayerBridge {
 const unsupported = (_feature: string): Promise<never> =>
   Promise.reject(new Error('Android Media3 播放器不支持该高级音效能力'));
 
+/**
+ * 每个事件名已处理到的最大 `__seq`。
+ *
+ * ⚠️ 必须是模块级的：`setMediaSessionHandlers` 可能被注册不止一次，去重状态若放在
+ * `listen()` 的闭包里，每个订阅会各自处理一遍同一事件 —— 实测一次按键跳两首。
+ */
+const lastSeqByEvent = new Map<string, number>();
+
 const listen = (eventName: string, handler: (payload: any) => void): Unsubscribe => {
   let active = true;
   let handle: PluginListenerHandle | undefined;
@@ -246,14 +262,37 @@ const listen = (eventName: string, handler: (payload: any) => void): Unsubscribe
     }
     handle = registered;
   });
+
+  /*
+   * 备用通道：原生用 evaluateJavascript 直投的 CustomEvent。
+   *
+   * Capacitor 的原生→JS 事件走 WebMessageListener，实测 App 退到后台约 5 分钟后
+   * 这条通道不再投递（evaluateJavascript 却一直可用）—— 表现为后台进度不更新、
+   * 播完不切歌、按键无反应。两条通道会同时到达，按原生侧的单调 __seq 去重。
+   */
+  const onDirect = (event: Event) => {
+    const detail = (event as CustomEvent).detail as
+      | { event?: string; data?: { __seq?: number } }
+      | undefined;
+    if (!detail || detail.event !== eventName) return;
+    const seq = Number(detail.data?.__seq ?? 0);
+    if (seq > 0) {
+      const last = lastSeqByEvent.get(eventName) ?? 0;
+      if (seq <= last) return;
+      lastSeqByEvent.set(eventName, seq);
+    }
+    handler(detail.data);
+  };
+  window.addEventListener('hpp:native', onDirect);
+
   return () => {
     active = false;
+    window.removeEventListener('hpp:native', onDirect);
     if (handle) void handle.remove();
   };
 };
 
 const createPlayer = (): PlayerBridge => {
-  let fadeTimer: ReturnType<typeof setInterval> | null = null;
   let notificationRequested = false;
 
   const ensureNotificationPermission = async () => {
@@ -268,70 +307,42 @@ const createPlayer = (): PlayerBridge => {
   };
 
   /**
-   * 最近一次淡入淡出被取消时"停在哪个音量"。
+   * 最近一次淡入淡出"落在哪个音量"。
    *
-   * ⚠️ 淡入是从 0 开始的：期间被取消（暂停 / 切歌 / 又一次淡入）就会把音量
-   * 留在中间值甚至 0。之后若走的是"不淡入"的播放路径，就会变成
-   * **状态在播放、却完全没有声音**。这里记下来，方便恢复时兜底。
+   * ⚠️ 淡入是从 0 开始的：期间被取消（暂停 / 切歌）会把音量留在中间值。
+   * 之后若走"不淡入"的播放路径，就会变成**状态在播放、却没有声音**。
    */
   let lastFadeVolume = 0;
 
   /**
-   * 结算在途的淡入 Promise。
+   * 取消在途的淡入淡出。
    *
-   * ⚠️ 只 clearInterval 是不够的：`fade()` 里 `await new Promise(...)` 的 resolve
-   * 只会在“步进到终点”时被调用，一旦中途被取消就永远 pending。而
-   * `playWithFade` 是 `await fade(...)` 的，它挂住会让 `engine.play({fadeIn:true})`
-   * 永不落地 —— 表现为 `playbackIntent.phase` 卡在 loading、后续切歌与 seek 全被挡住。
+   * ⚠️ 现在斜坡由原生按 Handler 打步进（见 `setVolumeRamp`），所以这里
+   * 只负责把音量落到目标值 —— 不落的话淡入被中途取消会留下半截音量。
    */
-  let settleFade: (() => void) | null = null;
-
   const cancelFade = async (): Promise<void> => {
-    if (fadeTimer !== null) {
-      clearInterval(fadeTimer);
-      console.info(`[TransportDiag] fade:cancelled {"atVolume":${lastFadeVolume}}`);
-    }
-    fadeTimer = null;
-    const settle = settleFade;
-    settleFade = null;
-    settle?.();
+    await NativePlayer.setVolume({ volume: lastFadeVolume }).catch(() => undefined);
   };
 
+  /**
+   * 音量过渡。
+   *
+   * ⚠️ 必须交给原生做，**不能**在 JS 里用 setInterval 每 40ms 推一次音量：
+   * 页面退到后台后 Chromium 把 setInterval 节流到约 1 次/分钟，一段 1 秒的淡入
+   * 要跑几十分钟；而 `playTrack` 是 `await` 这次淡入的 —— 于是整条切歌链路挂住，
+   * 表现为"后台按下一首没反应"。同一个坑之前还导致过"在播但没声音"。
+   */
   const fade = async (from: number, to: number, durationMs: number): Promise<void> => {
-    await cancelFade();
     const start = Math.max(0, Math.min(100, Number(from) || 0));
     const target = Math.max(0, Math.min(100, Number(to) || 0));
-    console.info(
-      `[TransportDiag] fade:start {"from":${start},"to":${target},"ms":${durationMs}}`,
-    );
+    lastFadeVolume = target;
+    console.info(`[TransportDiag] fade:start {"from":${start},"to":${target},"ms":${durationMs}}`);
     if (durationMs <= 0 || start === target) {
-      lastFadeVolume = target;
       await NativePlayer.setVolume({ volume: target });
       return;
     }
-    const steps = Math.max(1, Math.round(durationMs / 40));
-    let step = 0;
-    try {
-      await new Promise<void>((resolve, reject) => {
-        settleFade = resolve;
-        fadeTimer = setInterval(() => {
-          step += 1;
-          const ratio = Math.min(1, step / steps);
-          lastFadeVolume = start + (target - start) * ratio;
-          void NativePlayer.setVolume({ volume: lastFadeVolume }).catch(reject);
-          if (ratio >= 1) {
-            void cancelFade().then(resolve);
-          }
-        }, 40);
-      });
-    } finally {
-      // 兜底：无论淡入是正常结束还是被中途取消/异常，最终都把音量落到目标值。
-      // 不做这件事的话，被取消的淡入会把音量永久留在 0（表现为"在播但没声音"）。
-      settleFade = null;
-      lastFadeVolume = target;
-      await NativePlayer.setVolume({ volume: target }).catch(() => undefined);
-      console.info(`[TransportDiag] fade:settled {"volume":${target}}`);
-    }
+    // 原生按 Handler 打步进，不受 WebView 定时器节流影响；调用立即返回。
+    await NativePlayer.setVolumeRamp({ from: start, to: target, durationMs });
   };
 
   return {
@@ -347,6 +358,13 @@ const createPlayer = (): PlayerBridge => {
     stop: () => NativePlayer.stop(),
     seek: async (time) => NativePlayer.seek({ time }),
     setVolume: async (volume) => NativePlayer.setVolume({ volume }),
+    debugLog: async (message) => {
+      try {
+        await NativePlayer.log({ message });
+      } catch {
+        // 诊断通道失败不能影响播放
+      }
+    },
     setSpeed: async (speed) => NativePlayer.setSpeed({ speed }),
     setLoopFile: async (loop) => NativePlayer.setLoopFile({ loop }),
     setPauseOnDeviceDisconnect: async (enabled) =>
@@ -369,10 +387,9 @@ const createPlayer = (): PlayerBridge => {
       await fade(0, targetVolume, durationMs);
     },
     pauseWithFade: async (savedVolume, durationMs) => {
-      const state = await NativePlayer.getState();
-      await fade(state.volume, 0, durationMs);
-      await NativePlayer.pause();
-      await NativePlayer.setVolume({ volume: savedVolume });
+      // 整段交给原生：淡出 → 暂停 → 还原音量。分三步在 JS 里做的话，中间那个
+      // await 依赖淡出完成，后台被节流时暂停会被拖到几十秒后才发生。
+      await NativePlayer.pauseWithFade({ durationMs, restoreVolume: savedVolume });
     },
     fade,
     cancelFade,

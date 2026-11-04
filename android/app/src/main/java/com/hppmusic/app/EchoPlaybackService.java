@@ -28,6 +28,7 @@ import androidx.annotation.Nullable;
 import androidx.core.app.NotificationCompat;
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
+import androidx.media3.common.ForwardingPlayer;
 import androidx.media3.common.MediaItem;
 import androidx.media3.common.MediaMetadata;
 import androidx.media3.common.PlaybackException;
@@ -108,11 +109,15 @@ public final class EchoPlaybackService extends MediaSessionService {
 
     public static final int LOAD_TIMEOUT_MS = 15_000;
     private static final int POSITION_UPDATE_MS = 250;
+    /** 音量斜坡步进间隔：40ms ≈ 25 步/秒，听感平滑且开销可忽略。 */
+    private static final long VOLUME_RAMP_STEP_MS = 40;
     private static volatile EchoPlaybackService instance;
 
     private final IBinder binder = new LocalBinder();
     private final Set<Listener> listeners = new CopyOnWriteArraySet<>();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    /** 当前在跑的音量斜坡；每次 startVolumeRamp / setVolume 都会先换成新的（或清空）。 */
+    private Runnable volumeRampStep = () -> { };
 
     private ExoPlayer player;
     private EchoDspAudioProcessor dspProcessor;
@@ -148,6 +153,81 @@ public final class EchoPlaybackService extends MediaSessionService {
 
     public static EchoPlaybackService getInstance() {
         return instance;
+    }
+
+    /**
+     * 只拦上下首的播放器外壳，交给 MediaSession 使用。
+     *
+     * ## 为什么不用 `onPlayerCommandRequest` 拒绝
+     *
+     * 系统媒体卡片（通知栏 / 锁屏）和车机点"下一首"走的是 MediaSession 的播放器命令，
+     * 不经过 `onMediaButtonEvent`。它直接落到 ExoPlayer 的播放列表上，而原生列表只有
+     * 预置的那几首（`BACKGROUND_QUEUE_AHEAD`）—— 在小窗口里 seek 就是"两首来回切"。
+     *
+     * 一开始的做法是在 `onPlayerCommandRequest` 里返回 `RESULT_ERROR_NOT_SUPPORTED`
+     * 把它挡回去。**副作用**：Media3 会把 COMMAND_SEEK_TO_NEXT 从该控制器的可用命令里
+     * 摘掉，SystemUI 于是把"下一首"按钮整个隐藏 —— 按钮都没了，更谈不上切歌。
+     *
+     * 正确做法是在播放器这一层拦截：命令照常"被接受"（可用命令保持不变、按钮还在），
+     * 但动作由这里接住转给渲染层，不落到 ExoPlayer 上。
+     */
+    private final class NavigationGuardPlayer extends ForwardingPlayer {
+        NavigationGuardPlayer() {
+            super(player);
+        }
+
+        /**
+         * 这两个命令**始终**声明可用。
+         *
+         * 否则按钮会时有时无：`clearBackgroundQueue` 会把预置的"下一首"清掉，
+         * 播放列表瞬间只剩当前项，ExoPlayer 的 `getAvailableCommands()` 里就没有
+         * SEEK_TO_NEXT 了；Media3 据此重算 PlaybackState，SystemUI 于是把
+         * "下一首"按钮整个藏起来（用户报的就是这个）。
+         * 而我们的上下首由渲染层执行，跟原生列表里有没有下一项无关 —— 声明成
+         * 恒可用才是对的。
+         */
+        @Override
+        public Player.Commands getAvailableCommands() {
+            return super.getAvailableCommands().buildUpon()
+                    .addAll(
+                            Player.COMMAND_SEEK_TO_NEXT,
+                            Player.COMMAND_SEEK_TO_NEXT_MEDIA_ITEM,
+                            Player.COMMAND_SEEK_TO_NEXT_WINDOW,
+                            Player.COMMAND_SEEK_TO_PREVIOUS,
+                            Player.COMMAND_SEEK_TO_PREVIOUS_MEDIA_ITEM,
+                            Player.COMMAND_SEEK_TO_PREVIOUS_WINDOW)
+                    .build();
+        }
+
+        @Override
+        public void seekToNext() {
+            emitMediaControl("NextSong");
+        }
+
+        @Override
+        public void seekToNextMediaItem() {
+            emitMediaControl("NextSong");
+        }
+
+        @Override
+        public void seekToNextWindow() {
+            emitMediaControl("NextSong");
+        }
+
+        @Override
+        public void seekToPrevious() {
+            emitMediaControl("PreviousSong");
+        }
+
+        @Override
+        public void seekToPreviousMediaItem() {
+            emitMediaControl("PreviousSong");
+        }
+
+        @Override
+        public void seekToPreviousWindow() {
+            emitMediaControl("PreviousSong");
+        }
     }
 
     /**
@@ -562,7 +642,7 @@ public final class EchoPlaybackService extends MediaSessionService {
             }
         });
 
-        mediaSession = new MediaSession.Builder(this, player)
+        mediaSession = new MediaSession.Builder(this, new NavigationGuardPlayer())
                 .setId("HppMusic")
                 .setCallback(new MediaSession.Callback() {
                     /**
@@ -583,8 +663,7 @@ public final class EchoPlaybackService extends MediaSessionService {
                     public boolean onMediaButtonEvent(
                             @NonNull MediaSession session,
                             @NonNull MediaSession.ControllerInfo controllerInfo,
-                            @NonNull Intent mediaButtonIntent) {
-                        if (!Intent.ACTION_MEDIA_BUTTON.equals(mediaButtonIntent.getAction())) {
+                            @NonNull Intent mediaButtonIntent) {                        if (!Intent.ACTION_MEDIA_BUTTON.equals(mediaButtonIntent.getAction())) {
                             return false;
                         }
                         KeyEvent event = mediaButtonIntent.getParcelableExtra(Intent.EXTRA_KEY_EVENT);
@@ -788,14 +867,17 @@ public final class EchoPlaybackService extends MediaSessionService {
      * 由 renderer 处理随机、单循环、失败跳过、私人 FM 等动态队列。
      */
     private void emitMediaControl(String type) {
-        if (appInBackground) {
-            // 这里不能只依赖 notifyListeners：后台 WebView 可能完全不调 JS，
-            // 但通知栏按钮本身已经被 Android 消费掉了。
-            if (pendingMediaControls.size() >= 16) pendingMediaControls.removeFirst();
-            pendingMediaControls.addLast(new PendingControl(type, SystemClock.uptimeMillis(), sourceSeq));
-            Log.i(TAG, "后台媒体按键已暂存: " + type);
-            return;
-        }
+        /*
+         * 一律推给渲染层 —— 包括后台。
+         *
+         * 早期版本在 appInBackground 时**只暂存、不推**，理由是"后台 WebView 可能
+         * 完全不调 JS"。这个前提是错的：实测后台 JS 照常执行（渲染层心跳一直在跑）。
+         *
+         * ⚠️ 也不要再"暂存一份、回前台补跳"：事件现在一定送达，补跳只会导致
+         * 回前台后多跳一首（实测一次按键跳两首）。
+         */
+        Log.i(TAG, "媒体按键送达渲染层: " + type + " background=" + appInBackground
+                + " listeners=" + listeners.size());
         for (Listener listener : listeners) {
             listener.onMediaControl(type, null, null);
         }
@@ -869,6 +951,8 @@ public final class EchoPlaybackService extends MediaSessionService {
                 return;
             }
             cancelPendingLoad("Audio source load was superseded");
+            // 新音源接手前先掐掉上一首的淡入/淡出，否则新歌会被旧斜坡改音量
+            cancelVolumeRamp();
             // 新音源接手：上一次的后台队列映射全部作废，避免旧的 mediaId→业务 ID 映射串到新歌单。
             resetBackgroundQueueState();
             int seq = ++sourceSeq;
@@ -917,6 +1001,8 @@ public final class EchoPlaybackService extends MediaSessionService {
             // 对方释放焦点会把音乐又自动放起来。
             focusLossPaused = false;
             mainHandler.removeCallbacks(focusLossCheck);
+            // 淡入途中被暂停：不掐掉斜坡的话音量会停在中间值，下次播放偏小声
+            cancelVolumeRamp();
             player.pause();
             // 暂停就不再占用焦点：继续占着会把别的 App 挤掉，而且一旦被抢走
             // 就会走 LOSS 分支留下“拿不到焦点”的后遗症。恢复播放时
@@ -969,7 +1055,69 @@ public final class EchoPlaybackService extends MediaSessionService {
     }
 
     public CompletableFuture<Void> setVolume(double volume) {
-        return command(() -> player.setVolume((float) Math.max(0, Math.min(1, volume / 100.0))));
+        return command(() -> {
+            cancelVolumeRamp();
+            player.setVolume((float) Math.max(0, Math.min(1, volume / 100.0)));
+        });
+    }
+
+    /**
+     * 音量斜坡（淡入 / 淡出）。
+     *
+     * ⚠️ 用 Handler 打步进，**不能**交给渲染层的 setInterval：页面退到后台后
+     * Chromium 会把 setInterval 节流到约 1 次/分钟，一段 1 秒的淡入要跑几十分钟 ——
+     * 而 `playTrack` 是 `await` 这个淡入的，于是整条切歌链路挂住，表现为
+     * "后台按下一首没反应"。音量过渡属于播放器，本来就该在这一层做。
+     */
+    public CompletableFuture<Void> setVolumeRamp(double from, double to, long durationMs) {
+        return command(() -> startVolumeRamp(from, to, durationMs, false, 0));
+    }
+
+    /** 淡出到静音后暂停，再把音量恢复成 restoreVolume（不恢复的话下次播放是哑的）。 */
+    public CompletableFuture<Void> pauseWithFade(long durationMs, double restoreVolume) {
+        return command(() -> startVolumeRamp(
+                player.getVolume() * 100.0, 0, durationMs, true, restoreVolume));
+    }
+
+    private void cancelVolumeRamp() {
+        mainHandler.removeCallbacks(volumeRampStep);
+    }
+
+    private void startVolumeRamp(
+            double from, double to, long durationMs, boolean pauseAtEnd, double restoreVolume) {
+        cancelVolumeRamp();
+        long duration = Math.max(0, durationMs);
+        float startVolume = (float) Math.max(0, Math.min(1, from / 100.0));
+        float targetVolume = (float) Math.max(0, Math.min(1, to / 100.0));
+        if (duration == 0 || startVolume == targetVolume) {
+            player.setVolume(targetVolume);
+            if (pauseAtEnd) {
+                player.pause();
+                player.setVolume((float) Math.max(0, Math.min(1, restoreVolume / 100.0)));
+            }
+            return;
+        }
+        final long startedAt = SystemClock.elapsedRealtime();
+        volumeRampStep = new Runnable() {
+            @Override
+            public void run() {
+                if (!isPlayerReady()) return;
+                long elapsed = SystemClock.elapsedRealtime() - startedAt;
+                float ratio = Math.min(1f, elapsed / (float) duration);
+                player.setVolume(startVolume + (targetVolume - startVolume) * ratio);
+                if (ratio < 1f) {
+                    mainHandler.postDelayed(this, VOLUME_RAMP_STEP_MS);
+                    return;
+                }
+                // 收尾：精确落到目标值；需要暂停时顺带暂停并还原音量
+                player.setVolume(targetVolume);
+                if (pauseAtEnd) {
+                    player.pause();
+                    player.setVolume((float) Math.max(0, Math.min(1, restoreVolume / 100.0)));
+                }
+            }
+        };
+        mainHandler.post(volumeRampStep);
     }
 
     public CompletableFuture<Void> setSpeed(double speed) {
