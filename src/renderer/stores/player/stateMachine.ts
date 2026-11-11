@@ -113,6 +113,10 @@ export const getPlaybackIsLoading = (state: PlayerState): boolean =>
 export const getPlaybackHasFailed = (state: PlayerState): boolean =>
   state.playbackIntent.phase === 'failed' || state.enginePlayback.status === 'error';
 
+/** 仅失败态允许网络恢复时自动重取链；用户主动暂停是 ready+shouldPlay=false。 */
+export const shouldRetryFailedPlayback = (state: PlayerState): boolean =>
+  state.playbackIntent.phase === 'failed' && !!state.currentTrackId;
+
 export const getPlaybackIsPlaying = (state: PlayerState): boolean =>
   !getPlaybackHasFailed(state) &&
   (state.playbackIntent.shouldPlay || state.enginePlayback.status === 'playing');

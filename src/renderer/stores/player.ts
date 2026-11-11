@@ -68,6 +68,7 @@ import {
   setEnginePlaybackStatus,
   setPlaybackIntentPlayback,
   shouldIgnoreEnginePause,
+  shouldRetryFailedPlayback,
 } from './player/stateMachine';
 
 export const usePlayerStore = defineStore(
@@ -290,6 +291,7 @@ export const usePlayerStore = defineStore(
             sourceQueueId: state.currentSourceQueueId,
             shouldPlay: wasPlaying,
           });
+          playbackManager.scheduleLoadingWatchdog();
           beginNativeTrackLoad(state);
         }
 
@@ -1475,6 +1477,7 @@ export const usePlayerStore = defineStore(
            */
           playbackManager.flushPendingSeek();
           playbackManager.flushAutoNext();
+          playbackManager.flushStalledLoading();
           sleepTimer.tick();
 
           if (
@@ -1906,6 +1909,15 @@ export const usePlayerStore = defineStore(
       showPlaybackNotice,
       clearPlaybackNotice,
       refreshCurrentTrack,
+      /** 失败态才重试；先置回"本该播放"，否则 refresh 会按暂停处理只取链不播。 */
+      retryFailedPlayback: (): boolean => {
+        if (!shouldRetryFailedPlayback(state)) return false;
+        if (getPlaybackIsLoading(state) || state.nativeSeekActive || state.seekTargetTime != null)
+          return false;
+        setPlaybackIntentPlayback(state, true);
+        void refreshCurrentTrack();
+        return true;
+      },
       init,
       whenInitialized: () => initialization,
       setVolumeSmooth,

@@ -49,10 +49,11 @@ initBackButtonHook();
 // 页面一加载就丢了。这里主动查一次把 --safe-area-inset-* 补上。
 applySafeAreaInsets();
 
-const [{ pinia }, { default: App }, { router }] = await Promise.all([
+const [{ pinia }, { default: App }, { router }, { usePlayerStore }] = await Promise.all([
   import('@mobile/store'),
   import('@mobile/App.vue'),
   import('@mobile/router'),
+  import('@/stores/player'),
 ]);
 
 const app = createApp(App);
@@ -66,8 +67,24 @@ app.config.errorHandler = (error, _instance, info) => {
   console.error('[mobile] vue error:', info, error);
 };
 
+/** 取链失败后，网络恢复或回前台时重取链；5s 内只重试一次。 */
+const installNetworkRecovery = (player: ReturnType<typeof usePlayerStore>): void => {
+  let lastRetryAt = 0;
+  const retry = (reason: string) => {
+    if (Date.now() - lastRetryAt < 5_000) return;
+    if (!player.retryFailedPlayback()) return;
+    lastRetryAt = Date.now();
+    console.info(`[mobile] network recovery: ${reason}`);
+  };
+  window.addEventListener('online', () => retry('online'));
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') retry('visible');
+  });
+};
+
 void router.isReady().then(() => {
   app.mount('#app');
   installBackgroundAudioKeepAlive();
+  installNetworkRecovery(usePlayerStore());
   console.info(`[mobile] mounted, bridge modules = ${bridge.moduleCount}`);
 });

@@ -46,6 +46,26 @@ interface ApiResponse {
 
 const SERVER_DEV = 'EchoMusic';
 
+/** CapacitorHttp 原生侧无超时，回传丢失时 Promise 永不 settle。 */
+const API_REQUEST_TIMEOUT_MS = 15_000;
+/** 听歌识曲要 POST 320KB PCM，弱网下 15s 不够。 */
+const BINARY_API_REQUEST_TIMEOUT_MS = 30_000;
+
+export const withRequestTimeout = <T>(
+  task: Promise<T>,
+  timeoutMs = API_REQUEST_TIMEOUT_MS,
+): Promise<T | null> => {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    task,
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), timeoutMs);
+    }),
+  ]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  });
+};
+
 let ready = false;
 const known = new Set(Object.keys(modules));
 
@@ -246,10 +266,17 @@ export const handleApiRequest = async (request: ApiRequest): Promise<ApiResponse
   query.cookie = { ...(query.cookie as Record<string, string>), ...authCookies };
 
   try {
-    const moduleResponse = (await moduleFn(query, (config: unknown) => {
-      (config as Record<string, unknown>).ip = '';
-      return util.createRequest(config);
-    })) as ApiResponse;
+    const moduleResponse = await withRequestTimeout(
+      moduleFn(query, (config: unknown) => {
+        (config as Record<string, unknown>).ip = '';
+        return util.createRequest(config);
+      }) as Promise<ApiResponse>,
+      isBinary(request.data) ? BINARY_API_REQUEST_TIMEOUT_MS : API_REQUEST_TIMEOUT_MS,
+    );
+    if (!moduleResponse) {
+      console.warn(`[api-bridge] 请求超时 ${request.url}`);
+      return { status: 504, body: { code: 504, data: null, msg: 'Request timeout' } };
+    }
     if (needsQualityLedger(request.url)) recordQualityOutcome(query, moduleResponse?.body);
 
     return {

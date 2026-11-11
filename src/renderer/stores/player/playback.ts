@@ -63,6 +63,9 @@ import {
 
 /** Fallback prefetch window when the transition settings are unavailable. */
 const GAPLESS_PREFETCH_WINDOW_SECS = 30;
+
+/** loading 超时兜底：取链挂死时必须解开 getPlaybackIsLoading 闸门。 */
+const LOADING_WATCHDOG_MS = 45_000;
 /**
  * 原生队列里预置几首"下一首"。
  *
@@ -1640,6 +1643,7 @@ export const createPlaybackManager = (
       sourceQueueId: state.currentSourceQueueId,
       shouldPlay: autoPlay,
     });
+    scheduleLoadingWatchdog();
     state.lastError = null;
     state.stallRecovering = false;
     // 开启切歌加载护栏：在新文件 file-loaded 之前丢弃上一首的残留进度回报
@@ -2037,6 +2041,42 @@ export const createPlaybackManager = (
     pendingSeekRequestSeq = null;
     pendingSeekTrackId = null;
     pendingSeekDeadline = 0;
+  };
+
+  /**
+   * loading 看门狗。
+   *
+   * 原生 tick 只在 isPlaying() 时发，取链挂死时收不到，所以定时器是主路径；
+   * tick 只作为后台恢复后的补发。两条路径都按 startedAt 判定，幂等。
+   */
+  let loadingWatchdogTimer: number | null = null;
+
+  const clearLoadingWatchdog = (): void => {
+    if (loadingWatchdogTimer === null) return;
+    window.clearTimeout(loadingWatchdogTimer);
+    loadingWatchdogTimer = null;
+  };
+
+  const flushStalledLoading = (force = false): void => {
+    const startedAt = state.playbackIntent.startedAt;
+    if (state.playbackIntent.phase !== 'loading' || !startedAt) return;
+    if (!force && Date.now() - startedAt < LOADING_WATCHDOG_MS) return;
+    clearLoadingWatchdog();
+    logger.error('PlayerPlayback', 'Playback loading timed out', {
+      trackId: state.currentTrackId,
+      elapsedMs: Date.now() - startedAt,
+    });
+    state.lastError = 'audio-url-unavailable';
+    showPlaybackNotice('audio-url-unavailable', state.currentTrackSnapshot);
+    applyFailedPlaybackState();
+  };
+
+  const scheduleLoadingWatchdog = (): void => {
+    clearLoadingWatchdog();
+    loadingWatchdogTimer = window.setTimeout(() => {
+      loadingWatchdogTimer = null;
+      flushStalledLoading(true);
+    }, LOADING_WATCHDOG_MS);
   };
 
   /**
@@ -2686,6 +2726,8 @@ export const createPlaybackManager = (
     clearAutoNextTimer,
     flushAutoNext,
     flushPendingSeek,
+    flushStalledLoading,
+    scheduleLoadingWatchdog,
     skipToNextAfterFailure,
     scheduleAutoNext,
     playTrack,

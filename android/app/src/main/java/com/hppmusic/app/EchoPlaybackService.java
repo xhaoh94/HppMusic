@@ -1375,8 +1375,11 @@ public final class EchoPlaybackService extends MediaSessionService {
     public CompletableFuture<Void> updateMetadata(String title, String artist, String album,
                                                    String coverUrl, long durationMs) {
         return command(() -> {
+            MediaMetadata previous = pendingMetadata;
             MediaMetadata.Builder metadata = new MediaMetadata.Builder();
-            if (title != null) metadata.setTitle(title);
+            // 空标题会落到 buildPlaybackNotification 的「未在播放」占位，取链失败时保留上一首。
+            if (title != null && !title.isEmpty()) metadata.setTitle(title);
+            else if (previous != null && previous.title != null) metadata.setTitle(previous.title);
             if (artist != null) metadata.setArtist(artist);
             if (album != null) metadata.setAlbumTitle(album);
             if (coverUrl != null && !coverUrl.isEmpty()) metadata.setArtworkUri(Uri.parse(coverUrl));

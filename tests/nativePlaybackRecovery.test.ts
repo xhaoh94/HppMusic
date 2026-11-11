@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createNativePlaybackReconciler, nativeSnapshotTrackId } from '../src/shared/nativePlaybackSnapshot';
 
 vi.mock('@/utils/logger', () => ({ default: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
@@ -17,8 +17,12 @@ vi.mock('../src/renderer/stores/playlist/helpers', () => ({
 
 import { createPlaybackManager, BACKGROUND_QUEUE_AHEAD } from '../src/renderer/stores/player/playback';
 import { createPlayerState } from '../src/renderer/stores/player/state';
+import { getPlaybackIsLoading } from '../src/renderer/stores/player/stateMachine';
 import { nativeQueueMode, nativeQueueCandidateIndices } from '../src/shared/nativeQueueMode';
 import { createAudioManager } from '../src/renderer/stores/player/audio';
+
+beforeEach(() => vi.stubGlobal('window', { setTimeout, clearTimeout }));
+afterEach(() => vi.unstubAllGlobals());
 
 const snapshot = (id = 'c', paused = false) => ({
   trackId: id, mediaId: `hppmusic-background-next:${id}`, path: `https://audio/${id}`,
@@ -440,5 +444,26 @@ describe('高频 seek 合并', () => {
     expect(f.engine.seek).toHaveBeenLastCalledWith(30);
     clock.mockRestore();
     vi.unstubAllGlobals();
+  });
+});
+
+describe('取链挂死后的 loading 看门狗', () => {
+  it('未到超时不打扰正常加载', () => {
+    const f = fixture();
+    f.state.playbackIntent.phase = 'loading';
+    f.state.playbackIntent.startedAt = Date.now();
+    f.manager.flushStalledLoading();
+    expect(f.state.playbackIntent.phase).toBe('loading');
+    expect(f.engine.reset).not.toHaveBeenCalled();
+  });
+
+  it('超时把 loading 解成 failed，播放入口的闸门随之打开', () => {
+    const f = fixture();
+    f.state.playbackIntent.phase = 'loading';
+    f.state.playbackIntent.startedAt = Date.now() - 60_000;
+    f.manager.flushStalledLoading();
+    expect(f.state.playbackIntent.phase).toBe('failed');
+    expect(f.engine.reset).toHaveBeenCalled();
+    expect(getPlaybackIsLoading(f.state)).toBe(false);
   });
 });
