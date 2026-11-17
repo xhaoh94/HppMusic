@@ -13,6 +13,8 @@ import { useRouter } from 'vue-router';
 import PageHeader from '@mobile/components/PageHeader.vue';
 import SongRow from '@mobile/components/SongRow.vue';
 import EmptyState from '@mobile/components/EmptyState.vue';
+import { useCurrentSongKey, useLocatePlayingSong } from '@mobile/composables/useCurrentSong';
+import { songKeyOf } from '@mobile/utils/songKey';
 import { usePlaybackActions } from '@mobile/adapters/player';
 import { getEverydayRecommend } from '@/api/music';
 import { extractList } from '@/utils/extractors';
@@ -29,6 +31,10 @@ type LoadState = 'loading' | 'ready' | 'error';
 const state = ref<LoadState>('loading');
 const songs = ref<Song[]>([]);
 const failureReason = ref('');
+
+// 当前播放标记 + 首次打开列表自动定位到正在播的那首
+const { currentSongKey } = useCurrentSongKey();
+useLocatePlayingSong(songs, currentSongKey);
 
 const load = async () => {
   state.value = 'loading';
@@ -96,6 +102,7 @@ onMounted(() => void load());
           v-for="(song, index) in songs"
           :key="`${song.id}-${index}`"
           :song="song"
+          :active="songKeyOf(song) === currentSongKey"
           show-index
           :index="index"
           @select="onSelect"
